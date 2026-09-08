@@ -36,6 +36,21 @@ DISCOVERY_TASKS = (
 # from tasks/<task>/routes.yaml and must never be added manually here.
 BUNDLE_COMBINATIONS = (
     ("tts", {"language": "zh", "metrics": ("tts_cer", "sim/wavlm-large", "dnsmos")}),
+    (
+        "tts",
+        {
+            "language": "ar",
+            "metrics": (
+                "tts_cer",
+                "sim/wavlm-large",
+                "sim/ecapa-tdnn",
+                "sim/eres2net",
+                "dnsmos",
+                "wv-mos",
+                "utmos",
+            ),
+        },
+    ),
     ("vc", {"language": "zh", "metrics": ("vc_cer", "sim/wavlm-large", "dnsmos")}),
     ("se", {"metrics": ("si-sdr", "stoi", "pesq", "dnsmos", "wv-mos", "utmos")}),
     ("tse", {"language": "zh", "metrics": ("si_sdr", "sim/wavlm-large", "dnsmos")}),
