@@ -228,6 +228,7 @@ def _run_node_local_json(args: list[str]) -> dict[str, Any]:
 
     extra_pythonpath = (*python_runtime.extra_pythonpath, str(_FUNASR_SRC))
     package_parent = Path(sure_eval.__file__).resolve().parent.parent
+    repo_root = package_parent.parent
     env = build_node_local_env(
         repo_src=package_parent,
         extra_pythonpath=extra_pythonpath,
@@ -236,7 +237,7 @@ def _run_node_local_json(args: list[str]) -> dict[str, Any]:
 
     completed = subprocess.run(
         [*python_runtime.command_prefix, "-m", MODULE_NAME, *args, "--json"],
-        cwd=NODE_DIR,
+        cwd=repo_root,
         env=env,
         text=True,
         capture_output=True,
