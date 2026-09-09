@@ -691,7 +691,6 @@ def _run_kwargs_from_pipeline(pipeline: dict[str, Any]) -> dict[str, Any]:
     ):
         kwargs["language"] = pipeline["language"]
     if task == "classification":
-        kwargs["task"] = pipeline.get("task_alias") or "classification"
         if pipeline.get("pipeline_id"):
             kwargs["pipeline_id"] = pipeline["pipeline_id"]
     elif task in {"ser", "gr", "slu"}:
