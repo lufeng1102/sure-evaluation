@@ -225,3 +225,4 @@ describe → pipeline.json → run_pipeline（现有流程不变）
 | Phase 2 | ✅ 已完成 | 动态 dispatch（ASR 6 处 if-elif 加 registry fallback，外部节点可跑通） |
 | Phase 3 | ✅ 已完成 | describe 聚合 + CLI 脚手架（choices 按 default_for 聚合；node create/list） |
 | Phase 4 | ✅ 已完成 | env 集成 + 示例包 + 文档 |
+| 测试与示例 | ✅ 已完成 | 30 个单元测试（protocol/registry/commands）+ lowercase/exact_match 示例包 |

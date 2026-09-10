@@ -53,8 +53,9 @@ SURE-EVALUATION 是一个**通用的系统评估引擎**，把“从模型输出
 
 ### 2.1 Pipeline / Node / Route
 
-- **Node（节点）**：一个影响分数（或数据形态）的可复用计算单元，位于
-  `src/sure_eval/evaluation/nodes/<stage>/<name>/`。按阶段（stage）划分：
+- **Node（节点）**：一个影响分数（或数据形态）的可复用计算单元。内置节点位于
+  `src/sure_eval/evaluation/nodes/<stage>/<name>/`；外部节点作为独立插件包在
+  运行时加载（见 [14.1 节点插件化](#141-节点插件化)）。按阶段（stage）划分：
   `frontend`、`normalization`、`transcription`、`scoring`、`validation`。
 - **Conversion（转换）**：位于 `evaluation/conversion/`，在节点链之前对输入做
   任务级格式转换（如 `sa_asr__cpwer`），也会进入 `computation_node_ids`。
@@ -190,7 +191,7 @@ python -m json.tool .sure-eval-demo/asr-en-wer/pipeline_description.json
 ## 4. CLI 参考
 
 CLI 由 Typer 构建，入口为 `sure_eval.cli:app`，命令别名 `sure-eval` 与
-`sure-evaluation`。三个子命令组 + 根命令：
+`sure-evaluation`。四个子命令组 + 根命令：
 
 ```text
 sure-eval
@@ -204,6 +205,9 @@ sure-eval
 │   ├── check                  # 校验节点环境（不创建）
 │   ├── setup                  # 准备节点环境（uv / binary / pip）
 │   └── download               # 下载 node_env.yaml 声明的模型/工具资产
+├── node
+│   ├── list                   # 列出内置 + 已安装插件节点
+│   └── create <name>          # 生成单文件 node.py 插件包模板
 └── agent
     └── plan                   # 面向 Agent 的路由解析 + 环境就绪度规划
 ```
@@ -325,6 +329,27 @@ sure-eval agent plan <task> [--language] [--metric | --metrics] [--pipeline-id] 
 指标一条，含 `pipeline_id`、`env_checks`、`setup` 提示）、`can_run_now`、
 `blocking_issues`、`next_steps`。适合 TUI Agent / 评测 Harness 做路由解析与
 环境就绪度判断。
+
+### 4.6 `node` 组
+
+```bash
+sure-eval node list [--json]
+sure-eval node create <name> --stage <stage> [-o/--output-dir <dir>]
+```
+
+- `node list`：列出所有已发现节点（内置 + entry point 插件），含 `node_id`、
+  `stage`、`version`、`source`、`selectors`、`default_for`、是否有 `build`。
+- `node create`：按名称与 `--stage`（`normalization` / `scoring` 等）生成一个
+  单文件 `node.py` 插件包模板，其 `pyproject.toml` 已声明 `sure_eval.nodes`
+  entry point。
+
+```bash
+sure-eval node create "My Norm" --stage normalization -o plugins/
+pip install -e plugins/my_norm        # 安装后自动被 node list 发现
+sure-eval node list --json | grep my_norm
+```
+
+外部节点约定、三种注册方式与运行流程见 [14.1 节点插件化](#141-节点插件化)。
 
 ---
 
@@ -670,6 +695,10 @@ KeyTextFiles(ref, hyp)
 | `manifest.yaml` | 节点身份：`id`、`version`、`stage`、`input/output_schema`、`implementation`、`profiles`、`upstream`（vendored 来源/许可/改动） |
 | `node.py`（或包） | 可调用的节点实现（如 `normalize_*`、`score_*`） |
 | `node_env.yaml`（可选） | 可选运行时声明：`runtime`（uv/binary/pip）、`models`、`tools`、`packages`、`verify`、`group` |
+
+> 外部节点（插件）不放在框架仓库内，而是以单文件 `node.py` 通过 entry point
+> 或本地路径在运行时加载，`MANIFEST`/`NODE_ENV` 以内联 dict 或包内相对路径
+> 提供，见 [14.1 节点插件化](#141-节点插件化)。
 
 ### 11.2 node_env.yaml 示例
 
