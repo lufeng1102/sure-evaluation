@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sure-eval-node-exact-match"
+version = "0.1.0"
+requires-python = ">=3.10"
+
+[project.entry-points."sure_eval.nodes"]
+"scoring/exact_match" = "sure_eval_node_exact_match.node"
+
+[tool.setuptools]
+packages = ["sure_eval_node_exact_match"]

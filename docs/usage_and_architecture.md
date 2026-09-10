@@ -858,7 +858,8 @@ pip install -e plugins/my_norm        # 安装后进入 node list 与 describe c
 `metric describe asr --language en --metric wer` 的 normalization slot choices 中；
 在 `routes.yaml` 里引用它（node 条目写 `normalization/<name>`）即可 `metric run`。
 
-完整示例：`examples/node_plugin_lowercase/`。
+完整示例：`examples/node_plugin_lowercase/`（normalization）与
+`examples/node_plugin_exact_match/`（scoring），两者可组合端到端运行。
 
 > 提交规范：`.venv/`、`**/checkpoints/`、模型权重（`*.ckpt`/`*.pt`/`*.onnx`/
 > `*.safetensors`/`*.bin`）、运行时日志与本地结果目录均被 `.gitignore` 排除，
