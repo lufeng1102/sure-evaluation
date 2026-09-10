@@ -268,10 +268,10 @@ def _load_executor_path(executor_path: str):
 
 
 def load_node_manifest(node_id: str) -> tuple[dict[str, Any], Path]:
-    manifest_id = NODE_MANIFEST_ALIASES.get(node_id, node_id)
-    stage, name = manifest_id.split("/", 1)
-    path = NODES_ROOT / stage / name / "manifest.yaml"
-    return load_yaml(path), path
+    from sure_eval.evaluation.node_registry import get_registry
+
+    registry = get_registry()
+    return registry.manifest(node_id), registry.manifest_path(node_id)
 
 
 def load_yaml(path: Path) -> dict[str, Any]:

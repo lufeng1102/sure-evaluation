@@ -453,10 +453,9 @@ def raise_if_environment_failed(results: list[EnvCheckResult]) -> None:
 def iter_known_node_ids() -> tuple[str, ...]:
     """Return node ids that need explicit environment visibility."""
 
-    discovered = {
-        f"{path.relative_to(NODES_ROOT).parts[0]}/{path.relative_to(NODES_ROOT).parts[1]}"
-        for path in NODES_ROOT.glob("*/*/node_env.yaml")
-    }
+    from sure_eval.evaluation.node_registry import get_registry
+
+    discovered = set(get_registry().iter_env_node_ids())
     return tuple(sorted(discovered | NODE_LOCAL_PROJECTS))
 
 

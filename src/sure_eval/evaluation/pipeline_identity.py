@@ -149,11 +149,19 @@ def _component_version(component: PipelineComponent) -> str:
 
 
 def _manifest_version(component: PipelineComponent) -> str:
-    path = _manifest_path(component)
-    if not path.exists():
+    if component.kind == "conversion":
+        path = CONVERSION_ROOT / component.component_id / "manifest.yaml"
+        if not path.exists():
+            return "v1"
+        with path.open("r", encoding="utf-8") as handle:
+            manifest = yaml.safe_load(handle) or {}
+        return str(manifest.get("version") or "v1")
+    from sure_eval.evaluation.node_registry import get_registry
+
+    try:
+        manifest = get_registry().manifest(component.component_id)
+    except KeyError:
         return "v1"
-    with path.open("r", encoding="utf-8") as handle:
-        manifest = yaml.safe_load(handle) or {}
     return str(manifest.get("version") or "v1")
 
 
