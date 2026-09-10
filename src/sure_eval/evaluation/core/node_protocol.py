@@ -5,10 +5,9 @@ conventions (module attributes plus a ``build`` factory).  This module defines
 the :class:`NodeRegistration` record produced from those conventions and the
 helpers that turn a raw module into that record.
 
-The design mirrors the HuggingFace Evaluate single-script convention:
-``MANIFEST`` plays the role of ``EvaluationModule._info``, ``build`` is the
+``MANIFEST`` declares the node's identity and metadata, ``build`` is the
 factory for the unified callable that ``run_pipeline`` executes, and
-``NODE_ENV`` maps to ``requirements.txt`` + ``_download_and_prepare``.
+``NODE_ENV`` declares optional runtime dependencies.
 """
 
 from __future__ import annotations

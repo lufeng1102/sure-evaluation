@@ -3,10 +3,6 @@
 > 目标：将 `normalization` / `scoring` 节点从「框架内建、编译期耦合」演进为
 > 「可外部安装的插件」，外部包通过 entry point 或本地路径在**运行时**被发现、
 > 描述、准备环境并执行，全程不改框架与 task 代码。
->
-> 设计参照 HuggingFace Evaluate 的
-> [Creating and sharing a new evaluation](https://huggingface.co/docs/evaluate/creating_and_sharing)
-> 方案。
 
 ## 1. 目标与成功标准
 
@@ -18,17 +14,17 @@
 4. 内建节点行为与 `pipeline_id` 完全向后兼容（回归零变化）。
 5. 提供 `sure-eval node create` 脚手架 + 最小示例包 + 文档。
 
-## 2. 参照：HF Evaluate 方案精髓
+## 2. 设计要点
 
-| 机制 | HF Evaluate | 对 SURE 的启发 |
-|---|---|---|
-| 模块形态 | 单个 `.py` 脚本，实现统一类接口（`_info`/`_compute`/`_download_and_prepare`） | 节点收敛为**单文件 `node.py`**，`MANIFEST` 内联 |
-| 多来源加载 | `evaluate.load("accuracy")` 内置 / `evaluate.load("lvwerra/x")` Hub / `evaluate.load("path/to/file.py")` 本地 | 节点引用支持**内置名 / 已装插件 / 本地路径** |
-| 脚手架 | `evaluate-cli create "My Metric"` 生成模板 | 新增 `sure-eval node create` / `node list` |
-| 依赖/资源 | `requirements.txt` + `_download_and_prepare` + `dl_manager` | `node_env` + `env download`（已有，对齐即可） |
-| 分享 | git push 到 Hub，无需重装库 | PyPI entry point（推荐）+ 本地路径（零安装） |
+| 机制 | 设计 |
+|---|---|
+| 模块形态 | 节点收敛为**单文件 `node.py`**，`MANIFEST` 内联（也可用包内 `manifest.yaml`） |
+| 多来源加载 | 节点引用支持**内置名 / 已装插件（entry point）/ 本地路径**三种来源 |
+| 脚手架 | 提供 `sure-eval node create` / `node list` 生成与列举插件 |
+| 依赖/资源 | `NODE_ENV` 声明运行时依赖，`env download` 下载模型/工具资产 |
+| 分发 | PyPI entry point（推荐）+ 本地路径（零安装） |
 
-核心启发是 **`load()` 的多来源按名动态加载** 与 **CLI 脚手架**。
+核心是 **按名动态加载的多来源 `resolve`** 与 **CLI 脚手架**。
 
 ## 3. 现状：耦合点清单
 
@@ -131,10 +127,78 @@ def build(*, language=None, profile="lowercase", **config):
 | `NODE_ENV` | ⬜ | dict（等价 node_env.yaml）或路径；无环境依赖则为 `None` |
 | `build(**config)` | ✅ | 工厂，返回 `Callable[[KeyTextFiles], tuple[KeyTextFiles, PipelineNodeResult]]` |
 
-> 与 HF 的「单脚本 + 统一接口」一致：`MANIFEST` 内联（等价 `_info`），`build`
-> 是工厂（等价 `_compute` 的构造），`NODE_ENV`（等价 `requirements.txt` +
-> `_download_and_prepare`）。为兼容现有内建节点，`manifest.yaml` / `node_env.yaml`
-> 文件形式**仍支持**（内联 dict 优先，文件兜底）。
+> `MANIFEST` 内联 dict 声明节点身份，`build` 是节点工厂，`NODE_ENV` 声明运行时
+> 依赖。为兼容现有内建节点，`manifest.yaml` / `node_env.yaml` 文件形式**仍支持**
+> （内联 dict 优先，文件兜底）。
+
+### 4.5 注册到 pipeline 运行（端到端例子）
+
+节点被 `node list` / registry 发现后，还需**接入一条 pipeline** 才能真正参与
+评分。两种方式：
+
+- **声明式（routes.yaml 引用）**：在 `tasks/<task>/routes.yaml` 加一条 route，
+  `nodes` 直接写外部节点 id——正式、可复现，推荐。
+- **describe 聚合**：节点声明 `profiles.default_for`（如 `ASR/en/wer`）后，自动
+  进入对应 task/lang/metric 的 `metric describe` slot choices。
+
+下面用仓库自带的两个示例节点组合，走通「注册 → 描述 → 运行」全流程：
+
+- **normalization**：`examples/node_plugin_lowercase`（英文小写归一化，声明
+  `SELECTORS = {"normalizer": "lowercase_norm"}`）
+- **scoring**：`examples/node_plugin_exact_match`（逐行完全匹配打分，声明
+  `SELECTORS = {"scorer": "exact_match"}`）
+
+```bash
+# 1. 安装两个示例插件（entry point 注册，见 4.2）
+pip install -e examples/node_plugin_lowercase
+pip install -e examples/node_plugin_exact_match
+
+# 2. 在 tasks/asr/routes.yaml 追加一条 route（nodes 写外部节点 id）
+```
+
+```yaml
+  -
+    language: en
+    metric: wer
+    pipeline_id: asr.en.wer.lowercase_norm_v1.exact_match_v1
+    nodes:
+      - normalization/lowercase_norm
+      - scoring/exact_match
+    input_contract: scoring/wenet_wer
+    executor: sure_eval.evaluation.tasks.asr.pipeline.evaluate_asr_files
+```
+
+```bash
+# 3. 描述 + 运行
+sure-eval metric describe asr --pipeline-id asr.en.wer.lowercase_norm_v1.exact_match_v1 \
+  --output p.json
+sure-eval metric run --pipeline p.json --ref-file ref.txt --hyp-file hyp.txt \
+  --output-dir out
+```
+
+结果：`pipeline_id = asr.en.wer.lowercase_norm_v1.exact_match_v1`，报告 trace 为
+`normalization/lowercase_norm → scoring/exact_match`，score 由 exact_match 给出
+（`hyp` 先小写归一化再逐行比对）。
+
+> `input_contract` 引用 task manifest 里**已声明**的输入契约（描述输入角色/格式，
+> 如 `scoring/wenet_wer` 的 `hyp`+`ref` key_text），与 scoring 节点实现解耦；
+> 外部节点可复用输入契约相同的现有契约名。
+
+**dispatch 原理**：
+
+1. route 的 `nodes` 条目经 `scripts/asr.py::_executor_selectors_from_route` 解析：
+   内置节点命中 if-elif，外部节点落入 fallback `_apply_external_selectors`，读
+   `registration.selectors`（即 `SELECTORS`），得到 `normalizer=lowercase_norm`、
+   `scorer=exact_match`。
+2. `tasks/asr/pipeline.py::evaluate_asr_files` 的 `_normalization_node` /
+   `_scoring_node` 经 registry fallback 按 node_id `resolve` 并 `build` 出 callable。
+3. `run_pipeline` 顺序执行，报告 trace 记录外部节点。
+
+两个声明各司其职：
+
+- `SELECTORS`：让任务 dispatch 按 selector 字符串找到本节点（接入 `metric run`）。
+- `profiles.default_for`：让 `metric describe` 的 choices 按 task/lang/metric 聚合
+  展示本节点（接入 describe 候选）。
 
 ## 5. 目标架构：多来源 `resolve`
 
@@ -166,9 +230,8 @@ describe → pipeline.json → run_pipeline（现有流程不变）
 - **6.4 describe/choices 聚合**：choices 由 registry 按 `profiles.default_for`
   聚合，外部节点自动进入对应 task/lang/metric 候选。
 - **6.5 环境集成**：`NodeEnvChecker` / `iter_known_node_ids` 读外部 `NODE_ENV`，
-  对齐 `env download`（对应 HF `_download_and_prepare`）。
-- **6.6 CLI 脚手架**：`sure-eval node create` / `node list`（对应
-  `evaluate-cli create`）。
+  对齐 `env download`。
+- **6.6 CLI 脚手架**：`sure-eval node create` / `node list` 生成与列举插件。
 
 ## 7. 分阶段实施
 
