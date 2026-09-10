@@ -297,6 +297,10 @@ def _normalize_normalizer(*, language: str, metric: str, normalizer: str | None)
         if language != "ar":
             raise ValueError("nemo_norm currently supports only Arabic ASR")
         return "nemo:ar_tn"
+    from sure_eval.evaluation.node_registry import get_registry
+
+    if get_registry().find_by_selector("normalization", "normalizer", normalized) is not None:
+        return normalized
     raise ValueError(f"Unsupported ASR normalizer: {normalizer}")
 
 
@@ -322,6 +326,10 @@ def _normalize_scorer(*, language: str, metric: str, scorer: str | None) -> str:
         if metric not in {"wer", "cer"}:
             raise ValueError(f"sctk_sclite does not support ASR metric={metric!r}")
         return "sctk_sclite"
+    from sure_eval.evaluation.node_registry import get_registry
+
+    if get_registry().find_by_selector("scoring", "scorer", normalized) is not None:
+        return normalized
     raise ValueError(f"Unsupported ASR scorer: {scorer}")
 
 
@@ -367,6 +375,14 @@ def _normalization_node(*, language: str, normalizer: str):
             lambda files: normalize_nemo_key_text_files(files),
             "nemo_norm",
         )
+    from sure_eval.evaluation.node_registry import get_registry
+
+    node_id = get_registry().find_by_selector("normalization", "normalizer", normalizer)
+    if node_id is not None:
+        return (
+            get_registry().build(node_id, language=language, normalizer=normalizer),
+            node_id.split("/", 1)[-1],
+        )
     raise ValueError(f"Unsupported ASR normalizer: {normalizer}")
 
 
@@ -388,6 +404,14 @@ def _scoring_node(*, metric: str, scorer: str):
             return score_sctk_sclite_cer, "sctk_sclite_cer"
         if metric == "wer":
             return score_sctk_sclite_wer, "sctk_sclite_wer"
+    from sure_eval.evaluation.node_registry import get_registry
+
+    node_id = get_registry().find_by_selector("scoring", "scorer", scorer)
+    if node_id is not None:
+        return (
+            get_registry().build(node_id, metric=metric, scorer=scorer),
+            node_id.split("/", 1)[-1],
+        )
     raise ValueError(f"Unsupported ASR scorer {scorer!r} for metric={metric!r}")
 
 
@@ -412,6 +436,11 @@ def _normalizer_component(*, language: str, normalizer_label: str):
         return node_component("normalization/punctuation_strip_norm")
     if normalizer_label == "nemo_norm":
         return node_component("normalization/nemo_norm", profile="ar_tn")
+    from sure_eval.evaluation.node_registry import get_registry
+
+    node_id = get_registry().find_node_by_name("normalization", normalizer_label)
+    if node_id is not None:
+        return node_component(node_id)
     raise ValueError(f"Unsupported ASR normalizer label: {normalizer_label}")
 
 
@@ -422,6 +451,11 @@ def _scoring_node_id(score_label: str) -> str:
         if score_label.startswith("sctk_sclite"):
             return "scoring/sctk_sclite"
         return f"scoring/{score_label}"
+    from sure_eval.evaluation.node_registry import get_registry
+
+    node_id = get_registry().find_node_by_name("scoring", score_label)
+    if node_id is not None:
+        return node_id
     raise ValueError(f"Unsupported ASR scoring label: {score_label}")
 
 

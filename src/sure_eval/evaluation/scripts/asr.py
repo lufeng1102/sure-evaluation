@@ -128,7 +128,21 @@ def _executor_selectors_from_route(route: dict) -> dict[str, str]:
             selectors["scorer"] = "token_mer"
         elif node_id == "scoring/sctk_sclite":
             selectors["scorer"] = "sctk_sclite"
+        else:
+            _apply_external_selectors(selectors, node_id)
     return selectors
+
+
+def _apply_external_selectors(selectors: dict[str, str], node_id: str) -> None:
+    """Fallback: read selector hints from an external (plugin) node registration."""
+
+    from sure_eval.evaluation.node_registry import get_registry
+
+    try:
+        registration = get_registry().resolve(node_id)
+    except KeyError:
+        return
+    selectors.update({key: str(value) for key, value in registration.selectors.items()})
 
 
 def _is_codeswitch_wenet_route(route: dict) -> bool:

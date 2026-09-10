@@ -127,6 +127,31 @@ class NodeRegistry:
                 ids.add(name)
         return tuple(sorted(ids))
 
+    def find_by_selector(self, stage: str, key: str, value: Any) -> str | None:
+        """Resolve an external node id by a selector declaration.
+
+        External nodes may declare ``SELECTORS = {"normalizer": "my_norm"}``
+        (or ``{"scorer": "my_scorer"}``).  This lets a task dispatch an unknown
+        selector string to the right node without hardcoding it.
+        """
+
+        for name, module_path in self.iter_entry_point_specs():
+            reg = self._module_registration(module_path, name, source="entry_point")
+            if reg.stage == stage and reg.selectors.get(key) == value:
+                return name
+        return None
+
+    def find_node_by_name(self, stage: str, name: str) -> str | None:
+        """Resolve a node id from its stage and name (builtin or entry point)."""
+
+        node_id = f"{stage}/{name}"
+        if self._builtin_manifest_path(node_id) is not None:
+            return node_id
+        for ep_name, _ in self.iter_entry_point_specs():
+            if ep_name == node_id:
+                return node_id
+        return None
+
     # ---- resolution ----
 
     def resolve(
