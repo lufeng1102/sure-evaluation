@@ -79,6 +79,12 @@ def build_pipeline_spec(
     node_slots = _node_slots(
         description.node_ids, selected_route=selected_route, route_choices=route_choices
     )
+    _append_external_node_choices(
+        node_slots,
+        task=normalized_task,
+        language=description.language,
+        metric=description.metric,
+    )
     run_args = {ROLE_TO_CLI_ARG.get(role, role): None for role in description.required_roles}
     required_roles = list(description.required_roles)
     if normalized_task in AUDIO_SAMPLE_TASKS:
@@ -673,6 +679,64 @@ def _stage_choices(stage: str, route_choices: list[dict[str, Any]]) -> list[str]
             if node_id.startswith(f"{stage}/") and node_id not in choices:
                 choices.append(node_id)
     return choices
+
+
+def _append_external_node_choices(
+    slots: list[dict[str, Any]],
+    *,
+    task: str,
+    language: str | None,
+    metric: str | None,
+) -> None:
+    """Append external (plugin) nodes whose ``default_for`` matches the selection."""
+
+    from sure_eval.evaluation.node_registry import get_registry
+
+    registry = get_registry()
+    for slot in slots:
+        stage = slot["stage"]
+        for node_id in registry.iter_node_ids():
+            if node_id in slot["choices"]:
+                continue
+            try:
+                reg = registry.resolve(node_id)
+            except KeyError:
+                continue
+            if reg.source == "builtin" or reg.stage != stage:
+                continue
+            if _default_for_matches(reg.manifest, task=task, language=language, metric=metric):
+                slot["choices"].append(node_id)
+
+
+def _default_for_matches(
+    manifest: dict[str, Any],
+    *,
+    task: str,
+    language: str | None,
+    metric: str | None,
+) -> bool:
+    for item in _iter_default_for(manifest):
+        parts = str(item).split("/")
+        if len(parts) != 3:
+            continue
+        item_task, item_language, item_metric = parts
+        if item_task.upper() != str(task).upper():
+            continue
+        if language and item_language.lower() != str(language).lower():
+            continue
+        if metric and item_metric.lower() != str(metric).lower():
+            continue
+        return True
+    return False
+
+
+def _iter_default_for(manifest: dict[str, Any]):
+    for profile in (manifest.get("profiles") or {}).values():
+        if isinstance(profile, dict):
+            for item in profile.get("default_for") or ():
+                yield item
+    for item in manifest.get("default_for") or ():
+        yield item
 
 
 def _slot_name(stage: str, stage_index: int, node_id: str) -> str:

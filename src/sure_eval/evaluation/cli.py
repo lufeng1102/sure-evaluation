@@ -33,10 +33,12 @@ from sure_eval.evaluation.env_check import (
     package_install_specs,
     raise_if_environment_failed,
 )
+from sure_eval.evaluation.node_commands import create_node, list_nodes
 
 metric_app = typer.Typer(help="Discover, describe, and run versioned evaluation pipelines")
 env_app = typer.Typer(help="Inspect and prepare optional node-local environments")
 agent_app = typer.Typer(help="Plan route selection and environment readiness for agents")
+node_app = typer.Typer(help="List registered nodes and scaffold external (plugin) nodes")
 app = typer.Typer(help="SURE-EVAL versioned system evaluation")
 console = Console()
 
@@ -911,6 +913,51 @@ def _print_agent_plan_table(payload: dict[str, object], *, output: Path | None) 
             console.print(f"  - {issue}")
 
 
+@node_app.command("list")
+def node_list(
+    json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON"),
+) -> None:
+    """List registered nodes (builtin + entry point)."""
+
+    payload = list_nodes()
+    if json_output:
+        sys.stdout.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+        return
+    table = Table(title=f"SURE-EVAL nodes ({payload['count']})")
+    table.add_column("Node id")
+    table.add_column("Stage")
+    table.add_column("Version")
+    table.add_column("Source")
+    table.add_column("Selectors")
+    table.add_column("Build")
+    for node in payload["nodes"]:
+        table.add_row(
+            node["node_id"],
+            node["stage"],
+            node["version"],
+            node["source"],
+            ", ".join(f"{k}={v}" for k, v in node["selectors"].items()) or "-",
+            "yes" if node["has_build"] else "no",
+        )
+    console.print(table)
+
+
+@node_app.command("create")
+def node_create(
+    name: str = typer.Argument(..., help="Human-readable node name, e.g. 'My Norm'"),
+    stage: str = typer.Option(..., "--stage", help="Node stage, e.g. normalization or scoring"),
+    output_dir: str = typer.Option(".", "--output-dir", "-o", help="Parent directory for the package"),
+) -> None:
+    """Scaffold a single-file external node package."""
+
+    payload = create_node(name, stage=stage, output_dir=output_dir)
+    console.print(f"[green]Created[/green] {payload['node_id']} in {payload['package_dir']}")
+    for path in payload["files"]:
+        console.print(f"  - {path}")
+    console.print(f"Install: [bold]{payload['install_hint']}[/bold]")
+
+
 app.add_typer(metric_app, name="metric")
 app.add_typer(env_app, name="env")
 app.add_typer(agent_app, name="agent")
+app.add_typer(node_app, name="node")
