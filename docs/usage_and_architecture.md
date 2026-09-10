@@ -814,14 +814,51 @@ PyTorch 2.8.0，GPU 可选），模型 `CohereLabs/cohere-transcribe-arabic-07-2
   （describe/run）。
 - **新增/升级节点**：`nodes/<stage>/<name>/manifest.yaml`（版本、profiles、
   upstream）+ `node.py` + 可选的 `node_env.yaml` / `pyproject.toml` / `uv.lock`。
-- **节点插件化（规划中）**：将 normalization/scoring 节点与框架解耦，支持外部
-  节点通过 entry point 或本地路径在运行时加载，详见 `docs/node_plugin_design.md`。
+- **节点插件化**：将 normalization/scoring 节点与框架解耦，支持外部节点通过
+  entry point 或本地路径在运行时加载。`sure-eval node create` 脚手架生成单文件
+  `node.py` 模板，`node list` 列出已发现节点；外部节点按 `profiles.default_for`
+  自动进入 `metric describe` 的 slot choices。详见 `docs/node_plugin_design.md`
+  与 `examples/node_plugin_lowercase/`，完整说明见 14.1。
 - **新增路由**：在 `routes.yaml` 增加一条 route，`pipeline_id` 的节点版本段自动
   参与身份；计算仍由带版本节点拥有。
 - **贡献转换**：`conversion/<id>/manifest.yaml` + `convert.py`。
 
 改动后应通过 `sure-eval metric routes`、精确 `metric describe`、pipeline 化
 `env check` 与 `metric run` 验证；Agent 需遵循 `docs/agent_contract.md`。
+
+### 14.1 节点插件化
+
+外部节点（normalization/scoring 等 stage）不再需要放进框架仓库，可作为独立包
+分发、在运行时加载。一个节点是单文件 `node.py`，暴露约定属性：
+
+| 属性 | 必填 | 说明 |
+|:--|:--|:--|
+| `NODE_ID` / `STAGE` / `VERSION` | ✅ | 节点身份 |
+| `MANIFEST` | ✅ | dict（等价 manifest.yaml）或包内相对路径 |
+| `NODE_ENV` | ⬜ | dict（等价 node_env.yaml）或路径；无依赖为 `None` |
+| `SELECTORS` | ⬜ | 让任务 dispatch 能按 selector 字符串找到本节点 |
+| `build(**config)` | ✅ | 工厂，返回 `Callable[[KeyTextFiles], tuple[KeyTextFiles, PipelineNodeResult]]` |
+
+三种注册方式：
+
+1. **entry point（正式分发）**：包 `pyproject.toml` 声明
+   `[project.entry-points."sure_eval.nodes"]`，`pip install` 后自动发现。
+2. **本地路径（调试）**：`resolve("normalization/<name>", local_paths=["/path/to/node.py"])`。
+3. **CLI 脚手架**：`sure-eval node create "My Norm" --stage normalization` 生成模板。
+
+命令：
+
+```bash
+sure-eval node list --json            # 列出内置 + 已安装插件节点
+sure-eval node create "My Norm" --stage normalization -o plugins/
+pip install -e plugins/my_norm        # 安装后进入 node list 与 describe choices
+```
+
+外部节点声明 `profiles.default_for: ["ASR/en/wer"]` 后，会自动出现在
+`metric describe asr --language en --metric wer` 的 normalization slot choices 中；
+在 `routes.yaml` 里引用它（node 条目写 `normalization/<name>`）即可 `metric run`。
+
+完整示例：`examples/node_plugin_lowercase/`。
 
 > 提交规范：`.venv/`、`**/checkpoints/`、模型权重（`*.ckpt`/`*.pt`/`*.onnx`/
 > `*.safetensors`/`*.bin`）、运行时日志与本地结果目录均被 `.gitignore` 排除，

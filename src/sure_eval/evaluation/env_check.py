@@ -146,6 +146,9 @@ class NodeEnvChecker:
         self.nodes_root = nodes_root
 
     def check_node(self, node_id: str) -> EnvCheckResult:
+        registration = self._registration(node_id)
+        if registration is not None and registration.source != "builtin":
+            return self._check_external_node(node_id, registration)
         manifest, _ = load_node_manifest(node_id)
         node_path = self._node_path(node_id)
         node_env = self.load_node_env(node_id)
@@ -251,6 +254,46 @@ class NodeEnvChecker:
         if not isinstance(data, dict):
             raise ValueError(f"node_env.yaml must contain a mapping: {path}")
         return data
+
+    def _registration(self, node_id: str):
+        """Resolve a node registration, or ``None`` for unknown ids."""
+
+        from sure_eval.evaluation.node_registry import get_registry
+
+        try:
+            return get_registry().resolve(node_id)
+        except KeyError:
+            return None
+
+    def _check_external_node(self, node_id: str, registration) -> EnvCheckResult:
+        """Check an external (plugin) node from its in-module ``NODE_ENV``."""
+
+        node_env = registration.node_env
+        if not node_env:
+            return EnvCheckResult(
+                name=node_id,
+                node_id=node_id,
+                runtime="in_process",
+                required=False,
+                status="ok",
+                message="in-process plugin node",
+            )
+        runtime_type = str((node_env.get("runtime") or {}).get("type") or "").strip()
+        runtime = {"binary": "binary", "pip": "pip_optional", "uv": "node_local_project"}.get(
+            runtime_type, "node_local_project"
+        )
+        return EnvCheckResult(
+            name=node_id,
+            node_id=node_id,
+            runtime=runtime,
+            required=True,
+            status="warning",
+            message=(
+                f"plugin node declares runtime={runtime_type or 'unknown'}; "
+                "env setup for external nodes is not yet supported"
+            ),
+            details={"source": registration.source, "module": registration.module},
+        )
 
     def _node_path(self, node_id: str) -> Path:
         stage, name = node_id.split("/", 1)

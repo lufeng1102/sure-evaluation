@@ -140,3 +140,25 @@ execute that selected identity and reject reports whose `pipeline_id`,
 pipeline identity fields before resolving node environments.
 Multi-metric requests are `pipeline_kind=bundle` and list atomic members in
 `member_pipeline_ids`.
+
+## Node Plugins
+
+External nodes are loaded at runtime and are not part of the framework repo.
+A plugin node is a single-file `node.py` exposing `NODE_ID`/`STAGE`/`VERSION`,
+`MANIFEST`, optional `NODE_ENV`/`SELECTORS`, and a `build(**config)` factory
+returning `Callable[[KeyTextFiles], tuple[KeyTextFiles, PipelineNodeResult]]`.
+
+Discovery and lifecycle:
+
+- Registration is by `[project.entry-points."sure_eval.nodes"]` (name = node id,
+  value = module path) or by a local path passed to `resolve()`.
+- `sure-eval node list` enumerates builtin + installed plugin nodes;
+  `sure-eval node create` scaffolds a template package.
+- A plugin node declares `profiles.default_for` (e.g. `ASR/en/wer`) to enter the
+  matching task/language/metric `metric describe` slot choices.
+- To run a plugin node, reference its node id in `routes.yaml` and follow the
+  exact-pipeline flow (describe → run); do not guess a `pipeline_id`.
+- Plugin `NODE_ENV` is read by `env check --node <id>`; in-process plugins
+  (`NODE_ENV = None`) report `ok` without environment preparation.
+
+Example: `examples/node_plugin_lowercase/`.
