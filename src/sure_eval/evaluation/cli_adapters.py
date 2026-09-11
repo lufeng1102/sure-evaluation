@@ -123,9 +123,79 @@ def build_pipeline_spec(
         "nodes": list(description.nodes),
         "conversion_steps": list(description.conversion_steps),
     }
+    _validate_pipeline_id_versions(payload["pipeline_id"], list(description.computation_node_ids))
     if output_path is not None:
         write_json(output_path, payload)
     return payload
+
+
+def _validate_pipeline_id_versions(pipeline_id: str, computation_node_ids: list[str]) -> None:
+    """Reject routes whose declared pipeline_id version chain is stale.
+
+    The pipeline_id's component suffixes (``..._vN``) must match the actual
+    manifest versions of the computation nodes, so a node version bump surfaces
+    at describe time instead of only failing at run time. Comparison is set-based
+    because bundle routes legitimately repeat a shared node (e.g. cosine trials
+    across metrics) while ``computation_node_ids`` is deduplicated.
+    """
+
+    declared = _pipeline_id_component_versions(pipeline_id)
+    actual_by_node = {
+        node_id: _node_manifest_version(node_id) for node_id in computation_node_ids
+    }
+    declared_set = set(declared)
+    actual_set = set(actual_by_node.values())
+    if declared_set == actual_set:
+        return
+    stale = sorted(declared_set - actual_set)
+    bumped = {node_id: version for node_id, version in actual_by_node.items() if version not in declared_set}
+    details = []
+    if stale:
+        details.append(f"route declares version(s) {stale!r} with no matching node")
+    if bumped:
+        details.append(f"node(s) {bumped!r} declare version(s) absent from the route")
+    raise ValueError(f"pipeline_id version mismatch: {'; '.join(details)}")
+
+
+def _pipeline_id_component_versions(pipeline_id: str) -> list[str]:
+    """Extract node version suffixes from an atomic or bundle pipeline_id."""
+
+    body = str(pipeline_id).split(".", 3)[3]
+    if "__" in body:
+        versions: list[str] = []
+        for member in body.split("__"):
+            parts = member.split(".")
+            versions.extend(part.rsplit("_", 1)[-1] for part in parts[1:])
+        return versions
+    return [part.rsplit("_", 1)[-1] for part in body.split(".")]
+
+
+def _node_manifest_version(node_id: str) -> str:
+    if node_id.startswith("conversion/"):
+        import yaml
+
+        from sure_eval.evaluation.pipeline_identity import CONVERSION_ROOT
+
+        path = CONVERSION_ROOT / node_id.split("/", 1)[1] / "manifest.yaml"
+        if path.exists():
+            with path.open("r", encoding="utf-8") as handle:
+                manifest = yaml.safe_load(handle) or {}
+            version = str(manifest.get("version") or "v1")
+        else:
+            version = "v1"
+    else:
+        from sure_eval.evaluation.node_registry import get_registry
+
+        try:
+            manifest = get_registry().manifest(node_id)
+        except KeyError:
+            version = "v1"
+        else:
+            version = str(manifest.get("version") or "v1")
+    from sure_eval.evaluation.pipeline_identity import slug
+
+    normalized = slug(version)
+    return normalized if normalized.startswith("v") else f"v{normalized}"
 
 
 def list_metric_routes(

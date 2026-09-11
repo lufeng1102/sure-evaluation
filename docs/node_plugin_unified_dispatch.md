@@ -495,3 +495,19 @@ executor；每组补「外部节点免改源码」单测（`tests/test_*_unified
 本次收尾另清除了 TSE/TTS/VC 中定义未调用的 `_node_name_for_metric` 死代码，
 并补 `tests/test_asr_unified_dispatch.py`（8 例）覆盖 ASR 外部 normalizer /
 scorer 的 selector 规范化、节点工厂 dispatch、组件身份与端到端组合链。
+
+### 9.6 describe 阶段 pipeline_id 版本链校验（已完成）
+
+`pipeline_id` 的节点版本链（`..._vN`）必须与各 computation node 的 manifest
+实际版本一致。executor 生成 `report.pipeline_id` 时版本从 manifest 动态读取，
+run 收尾的 `assert_report_matches_description` 会 fail fast；但 describe 阶段此前
+直接沿用 route 静态声明的 `pipeline_id`，可能产出「`pipeline_id` 写 `_v1` 而
+`nodes[].version` 已是 `v2`」的矛盾 JSON，把 mismatch 推迟到 run 才暴露。
+
+`build_pipeline_spec`（describe）现追加 `_validate_pipeline_id_versions`：按
+atomic / bundle（`__` 连接）解析 pipeline_id 里的节点版本链（每个 component 末尾的
+`_vN`，兼容节点名本身含 `_v3` 的情形），与 computation node 的 manifest 版本做
+集合比对（bundle 里跨 metric 复用的共享节点在 `computation_node_ids` 中会去重，
+故用集合而非按位比对），不一致即报 `pipeline_id version mismatch` 并点名差异。
+节点版本升级后，describe 阶段立即发现 route 声明过期，无需等到 run。覆盖测试见
+`tests/test_pipeline_id_version_check.py`（8 例）。
