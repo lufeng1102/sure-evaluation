@@ -48,13 +48,19 @@
 
 ### 4.1 方式 A：本地路径加载（零安装）
 
-最轻量，适合开发调试，节点与 route 都无需 `pip install` 打包，`metric
-describe` / `metric run` 传 `--extra-node-path`（可重复多次）指向本地目录；
+最轻量，适合开发调试，节点与 route 都无需 `pip install` 打包，`metric routes` /
+`metric describe` / `metric run` 以及 pipeline 形式的 `env setup` / `env check` 传
+`--extra-node-path`（可重复多次）指向本地目录；
 目录里 `node.py`（节点）与 `routes.py`（`ROUTES = [...]`）各自独立可选：
 
 ```bash
+sure-eval metric routes asr --language en --metric wer \
+  --extra-node-path ./my_norm_pkg/
+sure-eval metric describe asr --pipeline-id asr.en.wer.my_norm_v1.wenet_wer_v1 \
+  --extra-node-path ./my_norm_pkg/ --output p.json
+sure-eval env check --pipeline p.json --extra-node-path ./my_norm_pkg/
 sure-eval metric run --pipeline p.json \
-  --extra-node-path ./my_norm_pkg/ \      # 含 node.py 和/或 routes.py
+  --extra-node-path ./my_norm_pkg/ \
   --ref-file ref.txt --hyp-file hyp.txt --output-dir out
 ```
 
@@ -317,10 +323,13 @@ describe → pipeline.json → run_pipeline（现有流程不变）
 | SE/TSE 统一 dispatch | ✅ 已完成 | provider-backed audio 打分契约 + `_audio_quality_dispatch`/executor registry fallback（见 `docs/node_plugin_unified_dispatch.md` §9.2） |
 | TTS/VC 统一 dispatch | ✅ 已完成 | transcription 复合链（`audio_semantic` 收敛）+ speaker/MOS registry fallback（见 `docs/node_plugin_unified_dispatch.md` §9.3） |
 | ASR 载荷收敛 | ✅ 已完成 | `KeyTextFiles` 降级为 `NodePayload` 便捷别名（继承 + `roles={"ref","hyp"}`），旧插件兼容（见 `docs/node_plugin_unified_dispatch.md` §9.4） |
+| 六 executor 收敛 | ✅ 已完成 | classification/kws/s2tt/sd/slu/sv 内置 if-elif + registry fallback，外部节点真正动态 dispatch（见 `docs/node_plugin_unified_dispatch.md` §9.5） |
+| describe 版本链校验 | ✅ 已完成 | `build_pipeline_spec` 校验 route `pipeline_id` 版本链与节点 manifest 实际版本一致，版本升级即 describe 报错（见 `docs/node_plugin_unified_dispatch.md` §9.6） |
 
 ## 12. 后续：全 task 统一解耦
 
-上述 Phase 只解耦了 ASR（`run_pipeline` 契约写死 `KeyTextFiles`）。统一 dispatch
-方案见 `docs/node_plugin_unified_dispatch.md`：`NodePayload`（`EvaluationFiles`
-+ `artifacts`）统一节点载荷，已在本节以 VAD 为试点落地并验收通过；后续按该文档
-§8 的推广顺序（SA-ASR → SE/TSE → TTS/VC → ASR 收敛）逐步扩大覆盖。
+统一 dispatch 已全部落地：`NodePayload`（`EvaluationFiles` + `artifacts`）统一
+节点载荷，经 `docs/node_plugin_unified_dispatch.md` §8 的推广顺序（VAD →
+SA-ASR → SE/TSE → TTS/VC → ASR 收敛 → 六 executor 收敛）逐步完成，并在 describe
+阶段补上 `pipeline_id` 版本链一致性校验。13 个 task 的 executor 均已支持外部
+节点经 registry 动态 dispatch。

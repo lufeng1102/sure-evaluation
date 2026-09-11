@@ -243,6 +243,16 @@ route 无需 entry point 名。`describe` 时本地节点出现在对应 slot �
 - **TTS / VC 语义链**：transcription 节点 `build` 返回
   `node(audio_path, *, language, role) -> (transcript, trace)`，node_id 直接写在
   `route["nodes"]` 里，`transcribe_audio` 经 registry 装配。
+- **classification / slu / kws / sd**：`SELECTORS` 声明 `{"scorer": ...}`，
+  值被 executor 的 `_scoring_callable` registry fallback 命中（slu 另可声明
+  `{"normalizer": ...}` 替换 `prompt_norm`）。
+- **s2tt**：`SELECTORS` 声明 `{"scorer": ...}`，替换 `sacrebleu` /
+  `xcomet_xl` / `bleurt_20` 之外的自定义打分；scoring 节点 `build` 返回
+  `node(key_text_files, *, language, src_file) -> PipelineNodeResult`，score 放
+  `details["result"]["score"]`。
+- **sv**：`scoring/cosine_trial_scores` 前置固定内置，仅 metric 节点可替换——
+  `SELECTORS` 声明 `{"scorer": ...}` 替换 `det_eer` / `min_dcf_p005`，节点
+  `build` 返回 `node(scores, labels) -> PipelineNodeResult`。
 
 ## 6. 常见问题与边界
 

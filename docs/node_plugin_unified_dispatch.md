@@ -305,6 +305,9 @@ VAD 验证通过后，按「先契约简单、后契约复杂」的顺序推广�
 3. SE / TSE（audio 打分）✅ 已完成
 4. TTS / VC（frontend + transcription + normalization + scoring 复合链）✅ 已完成
 5. 最后统一 ASR（把 `KeyTextFiles` 收敛到 `NodePayload`）✅ 已完成
+6. 收尾六 executor（classification / kws / s2tt / sd / slu / sv 接 registry fallback，
+   消除「route 能注册但 executor 不 dispatch」）✅ 已完成（见 §9.5）
+7. describe 阶段 `pipeline_id` 版本链校验（节点升级即报错）✅ 已完成（见 §9.6）
 
 每一步都遵循「回归零变化 + 外部节点免改源码」两条验收，逐步扩大统一执行模型的
 覆盖范围。
@@ -506,8 +509,9 @@ run 收尾的 `assert_report_matches_description` 会 fail fast；但 describe �
 
 `build_pipeline_spec`（describe）现追加 `_validate_pipeline_id_versions`：按
 atomic / bundle（`__` 连接）解析 pipeline_id 里的节点版本链（每个 component 末尾的
-`_vN`，兼容节点名本身含 `_v3` 的情形），与 computation node 的 manifest 版本做
-集合比对（bundle 里跨 metric 复用的共享节点在 `computation_node_ids` 中会去重，
-故用集合而非按位比对），不一致即报 `pipeline_id version mismatch` 并点名差异。
+`_vN`，兼容节点名本身含 `_v3` 的情形），先按 component 名称对应 computation
+node，再逐节点与 manifest 版本比对；bundle 里跨 metric 复用且在
+`computation_node_ids` 中去重的共享节点会按首次出现顺序校验。不一致即报
+`pipeline_id version mismatch` 并点名差异。
 节点版本升级后，describe 阶段立即发现 route 声明过期，无需等到 run。覆盖测试见
-`tests/test_pipeline_id_version_check.py`（8 例）。
+`tests/test_pipeline_id_version_check.py`（9 例）。
