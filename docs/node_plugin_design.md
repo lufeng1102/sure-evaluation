@@ -308,3 +308,9 @@ describe → pipeline.json → run_pipeline（现有流程不变）
 | Phase 4 | ✅ 已完成 | env 集成 + 示例包 + 文档 |
 | 测试与示例 | ✅ 已完成 | 33 个单元测试（protocol/registry/commands/route-injection）+ lowercase/exact_match 示例包 |
 | route 注入 | ✅ 已完成 | `load_task_routes` 聚合 `sure_eval.routes` entry point，免改 routes.yaml |
+
+## 12. 后续：全 task 统一解耦
+
+上述 Phase 只解耦了 ASR（`run_pipeline` 契约写死 `KeyTextFiles`）。把「节点发现 +
+route 注入」已通用的两件事，扩展成「任意 task 加外部节点免改源码」的统一 dispatch，
+见 `docs/node_plugin_unified_dispatch.md`（含 VAD 试点实现草案）。
