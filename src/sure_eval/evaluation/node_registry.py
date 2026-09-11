@@ -295,6 +295,21 @@ class NodeRegistry:
                 regs.append(reg)
         return regs
 
+    def iter_local_route_modules(self) -> list[ModuleType]:
+        """Route modules discovered from session-scoped local paths.
+
+        A local path may be a directory containing ``routes.py``, or a ``.py``
+        file that exposes a ``ROUTES`` list.  This mirrors the ``sure_eval.routes``
+        entry point so a zero-install directory can register both nodes and
+        routes.
+        """
+        modules: list[ModuleType] = []
+        for path in self.local_paths:
+            module = _import_route_module(path)
+            if module is not None:
+                modules.append(module)
+        return modules
+
 
 _registry: NodeRegistry | None = None
 
@@ -333,3 +348,18 @@ def _import_path(path: str | Path) -> ModuleType:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _import_route_module(path: str | Path) -> ModuleType | None:
+    """Import a local route module (``dir/routes.py`` or a ``.py`` exposing ``ROUTES``)."""
+
+    p = Path(path)
+    if p.is_dir():
+        route_file = p / "routes.py"
+        if not route_file.exists():
+            return None
+        p = route_file
+    if not p.exists() or p.suffix != ".py":
+        return None
+    module = _import_path(p)
+    return module if hasattr(module, "ROUTES") else None

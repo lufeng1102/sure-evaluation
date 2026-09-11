@@ -198,27 +198,34 @@ normalization 节点同理（`SELECTORS = {"normalizer": ...}`，node 返回归�
 两个外部节点的 `SELECTORS` 会分别被读成 `normalizer=lowercase_norm` 与
 `scorer=exact_match`，走 registry fallback dispatch。
 
-## 4. 本地路径加载（节点零安装，适合调试）
+## 4. 本地路径加载（零安装，适合调试）
 
-节点模块可不用打包成 wheel：把 `node.py`（或含 `node.py` 的目录）传给
-`--extra-node-path`（可重复多次），`metric describe` / `metric run` 时
-`NodeRegistry` 按本地路径动态 `import`，无需 `pip install`。
+`--extra-node-path`（可重复多次）指向一个本地文件或目录，`metric describe` /
+`metric run` 时按路径动态加载，无需 `pip install`。一个目录里两类文件各自
+独立可选：
+
+| 目录内容 | 效果 |
+|---|---|
+| `routes.py`（`ROUTES = [...]`） | 注册 route（新 pipeline） |
+| `node.py`（`NODE_ID`/`build`） | 注册节点 |
+| 两者都有 | 同时注册节点 + route，对标 entry point 包 |
 
 ```bash
-sure-eval metric describe asr --language en --metric wer \
-  --extra-node-path ./my_norm.py \
+# 只加 pipeline：目录里只有 routes.py，nodes 指向内置节点
+sure-eval metric describe asr \
+  --pipeline-id asr.en.wer.whisper_norm_english_v1.wenet_wer_v1 \
+  --extra-node-path ./my_routes_dir \
   --output pipeline.json
 
 sure-eval metric run --pipeline pipeline.json \
-  --extra-node-path ./my_norm.py \
+  --extra-node-path ./my_routes_dir \
   --ref-file ref.txt --hyp-file hyp.txt --output-dir out
 ```
 
-本地节点要进入运行链，仍需一个 route 引用它的 node_id（route 写在
-`tasks/*/routes.yaml` 或经 `sure_eval.routes` entry point 注入）；
-`--extra-node-path` 只负责「节点模块的运行时加载」，不负责「route 注册」。
-describe 时本地节点会出现在对应 slot 的 `choices` 里，executor 的
-`find_by_selector` / `build` 自动按 `--extra-node-path` 解析。
+route 的 task 从 `executor`（`...tasks.<task>.pipeline...`）推断，因此本地
+route 无需 entry point 名。`describe` 时本地节点出现在对应 slot 的 `choices`
+里，`run` 时 executor 的 `find_by_selector` / `build` 自动按 `--extra-node-path`
+解析。
 
 > 注意：不能靠「改 `pipeline.json` 里 slot 的 `selected`」切换节点——run 阶段
 > 会校验 `selected` 与 `pipeline_id` 的节点链一致（保证可复现身份）。要用

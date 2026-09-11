@@ -93,3 +93,49 @@ def test_evaluate_asr_files_local_chain(tmp_path, monkeypatch) -> None:
         "normalization/lowercase_norm",
         "scoring/exact_match",
     ]
+
+
+def _write_route_only_dir(tmp_path: Path) -> Path:
+    package = tmp_path / "route_only"
+    package.mkdir()
+    (package / "routes.py").write_text(
+        'ROUTES = [{\n'
+        '    "language": "en",\n'
+        '    "metric": "wer",\n'
+        '    "pipeline_id": "asr.en.wer.whisper_norm_english_v1.wenet_wer_v1.local_only",\n'
+        '    "nodes": ["normalization/whisper_norm", "scoring/wenet_wer"],\n'
+        '    "input_contract": "scoring/wenet_wer",\n'
+        '    "executor": "sure_eval.evaluation.tasks.asr.pipeline.evaluate_asr_files",\n'
+        "}]\n"
+    )
+    return package
+
+
+def test_local_route_only_directory(tmp_path, monkeypatch) -> None:
+    """A directory with only routes.py registers a route (no node.py needed)."""
+    from sure_eval.evaluation.scripts.contracts import load_task_routes
+
+    package = _write_route_only_dir(tmp_path)
+    _install_local_paths(monkeypatch, str(package))
+
+    routes, _ = load_task_routes("asr")
+    ids = [route["pipeline_id"] for route in routes["routes"]]
+    assert "asr.en.wer.whisper_norm_english_v1.wenet_wer_v1.local_only" in ids
+
+    # The owning task is inferred from the executor, so another task ignores it.
+    vad_routes, _ = load_task_routes("vad")
+    vad_ids = [route["pipeline_id"] for route in vad_routes["routes"]]
+    assert "asr.en.wer.whisper_norm_english_v1.wenet_wer_v1.local_only" not in vad_ids
+
+
+def test_local_directory_registers_node_and_route(monkeypatch) -> None:
+    """One --extra-node-path directory supplies both node.py and routes.py."""
+    from sure_eval.evaluation.scripts.contracts import load_task_routes
+
+    _install_local_paths(monkeypatch, str(_LOWERCASE_NODE.parent))
+
+    assert get_registry().resolve("normalization/lowercase_norm").source == "local"
+
+    routes, _ = load_task_routes("asr")
+    ids = [route["pipeline_id"] for route in routes["routes"]]
+    assert "asr.en.wer.lowercase_norm_v1.wenet_wer_v1" in ids

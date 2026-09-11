@@ -46,21 +46,22 @@
 
 ## 4. 用户如何注册节点
 
-### 4.1 方式 A：本地路径加载（节点零安装）
+### 4.1 方式 A：本地路径加载（零安装）
 
-最轻量，适合开发调试，节点模块无需 `pip install` 打包，`metric describe` /
-`metric run` 传 `--extra-node-path`（可重复多次）：
+最轻量，适合开发调试，节点与 route 都无需 `pip install` 打包，`metric
+describe` / `metric run` 传 `--extra-node-path`（可重复多次）指向本地目录；
+目录里 `node.py`（节点）与 `routes.py`（`ROUTES = [...]`）各自独立可选：
 
 ```bash
 sure-eval metric run --pipeline p.json \
-  --extra-node-path ./my_norm.py \        # 或 ./my_norm_pkg/（含 node.py）
+  --extra-node-path ./my_norm_pkg/ \      # 含 node.py 和/或 routes.py
   --ref-file ref.txt --hyp-file hyp.txt --output-dir out
 ```
 
 `--extra-node-path` 让 `NodeRegistry` 在「内置 / entry point」之外按本地路径动态
-`import` 节点模块。节点要进入运行链，仍需一个 route 在 `nodes` 里引用它的
-node_id（route 写在 `tasks/*/routes.yaml` 或经 `sure_eval.routes` entry point 注入）；
-`--extra-node-path` 只负责节点模块的运行时加载，不负责 route 注册。
+`import`：目录里的 `node.py` 注册节点、`routes.py` 注册 route（route 的 task 从
+`executor` 推断）。于是「只加 node」「只加 pipeline」或「node + pipeline 一起加」
+都能零安装落地。
 
 ### 4.2 方式 B：entry point 安装（正式分发）
 

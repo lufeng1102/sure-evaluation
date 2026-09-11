@@ -88,6 +88,7 @@ def load_task_routes(task: str) -> tuple[dict[str, Any], Path]:
     path = TASKS_ROOT / task.lower() / "routes.yaml"
     routes = load_yaml(path)
     routes.setdefault("routes", []).extend(_load_external_routes(task))
+    routes.setdefault("routes", []).extend(_load_local_routes(task))
     return routes, path
 
 
@@ -116,6 +117,34 @@ def _load_external_routes(task: str) -> list[dict[str, Any]]:
             if isinstance(route, dict):
                 collected.append(dict(route))
     return collected
+
+
+def _load_local_routes(task: str) -> list[dict[str, Any]]:
+    """Collect session-scoped local route modules (``--extra-node-path`` directories).
+
+    A local directory may expose ``routes.py`` alongside ``node.py``; its ``ROUTES``
+    are merged here so a zero-install directory can register a whole pipeline.  The
+    owning task is inferred from each route's ``executor`` (``...tasks.<task>.pipeline...``)
+    since a local module has no entry point name to carry it.
+    """
+    from sure_eval.evaluation.node_registry import get_registry
+
+    collected: list[dict[str, Any]] = []
+    for module in get_registry().iter_local_route_modules():
+        for route in getattr(module, "ROUTES", None) or ():
+            if isinstance(route, dict) and _route_task(route) == task:
+                collected.append(dict(route))
+    return collected
+
+
+def _route_task(route: dict[str, Any]) -> str | None:
+    executor = str(route.get("executor") or "")
+    parts = executor.split(".")
+    # sure_eval.evaluation.tasks.<task>.pipeline.<fn>
+    if parts[:3] == ["sure_eval", "evaluation", "tasks"] and len(parts) >= 4:
+        return parts[3]
+    pipeline_id = str(route.get("pipeline_id") or "")
+    return pipeline_id.split(".", 1)[0] if pipeline_id else None
 
 
 def find_task_route(
