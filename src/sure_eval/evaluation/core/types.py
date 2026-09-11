@@ -3,16 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from typing import Any
-
-
-@dataclass(frozen=True)
-class KeyTextFiles:
-    """Reference and hypothesis files in key-tab-text format."""
-
-    ref_file: str
-    hyp_file: str
 
 
 @dataclass(frozen=True)
@@ -54,7 +46,42 @@ class NodePayload:
         return self.artifacts.get(key, default)
 
     def with_artifact(self, key: str, value: Any) -> "NodePayload":
-        return replace(self, artifacts={**self.artifacts, key: value})
+        new_payload = object.__new__(type(self))
+        object.__setattr__(new_payload, "files", self.files)
+        object.__setattr__(new_payload, "artifacts", {**self.artifacts, key: value})
+        return new_payload
+
+
+class KeyTextFiles(NodePayload):
+    """Backward-compatible convenience alias for ref/hyp key-text files.
+
+    ``KeyTextFiles(ref_file, hyp_file)`` is a :class:`NodePayload` whose ``files``
+    carry the ``ref``/``hyp`` roles.  The ``ref_file``/``hyp_file`` attributes
+    remain for legacy callers and external plugins written against the original
+    two-file contract.
+    """
+
+    __slots__ = ()
+
+    def __init__(self, ref_file: str, hyp_file: str) -> None:
+        object.__setattr__(
+            self, "files", EvaluationFiles.from_ref_hyp(ref_file=ref_file, hyp_file=hyp_file)
+        )
+        object.__setattr__(self, "artifacts", {})
+
+    @property
+    def ref_file(self) -> str:
+        return self.files.roles["ref"]
+
+    @property
+    def hyp_file(self) -> str:
+        return self.files.roles["hyp"]
+
+    @classmethod
+    def from_payload(cls, payload: "NodePayload") -> "KeyTextFiles":
+        """Construct from a NodePayload carrying ref/hyp roles."""
+        payload.files.require("ref", "hyp")
+        return cls(ref_file=payload.files.roles["ref"], hyp_file=payload.files.roles["hyp"])
 
 
 @dataclass(frozen=True)

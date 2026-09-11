@@ -312,6 +312,7 @@ describe → pipeline.json → run_pipeline（现有流程不变）
 | SA-ASR 统一 dispatch | ✅ 已完成 | normalization/scoring 走 `registry.build`（`KeyTextFiles` 契约）+ 外部 node_id 透传（见 `docs/node_plugin_unified_dispatch.md` §9.1） |
 | SE/TSE 统一 dispatch | ✅ 已完成 | provider-backed audio 打分契约 + `_audio_quality_dispatch`/executor registry fallback（见 `docs/node_plugin_unified_dispatch.md` §9.2） |
 | TTS/VC 统一 dispatch | ✅ 已完成 | transcription 复合链（`audio_semantic` 收敛）+ speaker/MOS registry fallback（见 `docs/node_plugin_unified_dispatch.md` §9.3） |
+| ASR 载荷收敛 | ✅ 已完成 | `KeyTextFiles` 降级为 `NodePayload` 便捷别名（继承 + `roles={"ref","hyp"}`），旧插件兼容（见 `docs/node_plugin_unified_dispatch.md` §9.4） |
 
 ## 12. 后续：全 task 统一解耦
 

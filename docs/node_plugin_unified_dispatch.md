@@ -121,17 +121,16 @@ node = get_registry().build(node_id, **config)   # 内置经适配层，外部�
   `NodePayload → NodePayload`（见 §4.2），不改现有节点函数。
 - 外部节点：`build(**config)` 直接返回 `NodePayload → NodePayload`。
 
-### 3.5 兼容策略（关键决策，需评审）
+### 3.5 兼容策略（已落地）
 
 `KeyTextFiles` 是 ASR 外部节点的既有契约（`examples/node_plugin_lowercase` 已按
 它写）。统一方案分两期，避免破坏性变更：
 
-- **本期（VAD 试点）**：新增 `NodePayload` + `EvaluationFiles` 路径，VAD 迁移；
-  **ASR 保持 `KeyTextFiles` 不动**，`run_pipeline` 鸭子类型同时支持两者。
-- **后续（可选）**：把 ASR 也迁到 `NodePayload`，届时 `KeyTextFiles` 降级为
-  `NodePayload` 的便捷别名（`roles={"ref","hyp"}`），旧插件经适配层继续可用。
-
-> 待评审点：是否要在本期就统一 ASR？倾向「否」——先证明 VAD 可行，再谈迁移。
+- **VAD 试点期**：新增 `NodePayload` + `EvaluationFiles` 路径，VAD 迁移；
+  ASR 保持 `KeyTextFiles` 不动，`run_pipeline` 鸭子类型同时支持两者。
+- **ASR 收敛期（已完成）**：把 ASR 也迁到 `NodePayload`——`KeyTextFiles` 降级为
+  `NodePayload` 的便捷别名（继承 `NodePayload`，`files` 携带 `roles={"ref","hyp"}`，
+  保留 `ref_file`/`hyp_file` 只读属性），旧插件经此别名层继续可用（见 §9.4）。
 
 ## 4. VAD 试点迁移方案
 
@@ -305,7 +304,7 @@ VAD 验证通过后，按「先契约简单、后契约复杂」的顺序推广�
 2. SA-ASR（key_text + 转写，混合契约）✅ 已完成
 3. SE / TSE（audio 打分）✅ 已完成
 4. TTS / VC（frontend + transcription + normalization + scoring 复合链）✅ 已完成
-5. 最后统一 ASR（把 `KeyTextFiles` 收敛到 `NodePayload`）
+5. 最后统一 ASR（把 `KeyTextFiles` 收敛到 `NodePayload`）✅ 已完成
 
 每一步都遵循「回归零变化 + 外部节点免改源码」两条验收，逐步扩大统一执行模型的
 覆盖范围。
@@ -445,3 +444,29 @@ frontend）此前经 `audio_semantic` 硬编码 dispatch，speaker/MOS 经
 `evaluate_asr_files`（ASR executor，本身已 registry 化）；本机未装 sctk / ASR 模型，
 完整语义链 `metric run` 无法端到端跑通——pre-existing 环境限制。至此仅剩 ASR
 自身载荷收敛（§8 第 5 步）。
+
+### 9.4 ASR 载荷收敛（已完成，推广收尾）
+
+把 `KeyTextFiles` 收敛到 `NodePayload`，让 ASR 与其余四类 task 共享同一载荷基类：
+
+- `core/types.py`：`KeyTextFiles` 改为继承 `NodePayload`——`files` 携带
+  `roles={"ref","hyp"}`，`artifacts` 默认为空；保留 `ref_file`/`hyp_file` 只读
+  property 与 `from_payload()` 反向构造；`NodePayload.with_artifact` 改用
+  `object.__new__` 构造以保留子类（`KeyTextFiles`）类型。
+- 效果：`run_pipeline` 的 ASR 载荷（`KeyTextFiles` 实例）**类型上即**
+  `NodePayload`，`isinstance(payload, NodePayload)` 成立；旧 KeyTextFiles 插件
+  （`examples/node_plugin_lowercase`）经 `ref_file`/`hyp_file` 兼容层继续可用。
+
+验收结果：
+
+1. **回归零变化**：全量回归 387 passed + 51 skipped；ASR 19 条 route 的
+   `pipeline_id` 与 `describe`/`run` 行为不变。
+2. **旧插件兼容**：`examples/node_plugin_lowercase`（按旧 `KeyTextFiles` 契约编写）
+   安装后仍可 resolve + dispatch，`KeyTextFiles(ref, hyp)` 现为 `NodePayload`
+   实例，`.ref_file`/`.hyp_file` 只读属性照常。
+3. **单测**：新增 `tests/test_asr_payload_convergence.py`（6 例）覆盖
+   `KeyTextFiles` 是 `NodePayload` 子类、`roles={"ref","hyp"}`、legacy 属性、
+   `with_artifact` 保留子类类型、`from_payload`、ASR 载荷流经 `run_pipeline`。
+
+至此 §8 五步推广全部落地：VAD → SA-ASR → SE/TSE → TTS/VC → ASR 载荷收敛，
+统一执行模型覆盖全部任务族。
