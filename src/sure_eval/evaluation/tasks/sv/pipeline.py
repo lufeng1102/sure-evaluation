@@ -35,6 +35,7 @@ def evaluate_sv_files(
     *,
     metrics: Iterable[str] | None = None,
     work_dir: str | Path | None = None,
+    scorers: dict[str, str] | None = None,
 ) -> EvaluationReport:
     """Evaluate one OpenSVBench testset protocol from speaker embeddings."""
 
@@ -63,15 +64,19 @@ def evaluate_sv_files(
         labels = artifacts.labels()
         results: dict[str, dict[str, object]] = {}
         trace = [cosine_result]
+        metric_node_ids: dict[str, str] = {}
         for metric in requested_metrics:
-            if metric == "eer":
-                result = score_eer(scores, labels)
-            else:
-                result = score_min_dcf(scores, labels)
+            scoring_callable, metric_node_id = _metric_scoring_callable(
+                metric, (scorers or {}).get(metric)
+            )
+            result = scoring_callable(scores, labels)
             trace.append(result)
             results[metric] = dict(result.details["result"])
+            metric_node_ids[metric] = metric_node_id
 
-    member_pipeline_ids = tuple(_atomic_pipeline_id(metric) for metric in requested_metrics)
+    member_pipeline_ids = tuple(
+        _atomic_pipeline_id(metric, metric_node_ids[metric]) for metric in requested_metrics
+    )
     if len(requested_metrics) == 1:
         pipeline_id = member_pipeline_ids[0]
         pipeline_kind = "atomic"
@@ -83,7 +88,7 @@ def evaluate_sv_files(
         report_member_pipeline_ids = member_pipeline_ids
         metric_name = "multi"
 
-    computation_node_ids = _computation_node_ids(requested_metrics)
+    computation_node_ids = _computation_node_ids(requested_metrics, metric_node_ids)
     return EvaluationReport(
         task="SV",
         language="n/a",
@@ -121,22 +126,42 @@ def _normalize_metric(metric: str) -> str:
     return aliases.get(normalized, normalized)
 
 
-def _atomic_pipeline_id(metric: str) -> str:
-    return build_atomic_pipeline_id("sv", "any", metric, _components_for_metric(metric))
+def _metric_scoring_callable(metric: str, scorer: str | None):
+    """Resolve the SV metric node (builtin det_eer / min_dcf_p005 or external)."""
+
+    normalized = (scorer or "").lower().strip()
+    if metric == "eer":
+        if normalized in {"", "det_eer", "scoring/det_eer"}:
+            return score_eer, "scoring/det_eer"
+    elif metric == "min_dcf":
+        if normalized in {"", "min_dcf_p005", "scoring/min_dcf_p005"}:
+            return score_min_dcf, "scoring/min_dcf_p005"
+    if normalized:
+        from sure_eval.evaluation.node_registry import get_registry
+
+        node_id = get_registry().find_by_selector("scoring", "scorer", normalized)
+        if node_id is not None:
+            return get_registry().build(node_id), node_id
+    raise ValueError(f"Unsupported SV scorer for metric {metric!r}: {scorer!r}")
 
 
-def _components_for_metric(metric: str):
-    metric_node = "scoring/det_eer" if metric == "eer" else "scoring/min_dcf_p005"
+def _atomic_pipeline_id(metric: str, metric_node_id: str) -> str:
+    return build_atomic_pipeline_id("sv", "any", metric, _components_for_metric(metric, metric_node_id))
+
+
+def _components_for_metric(metric: str, metric_node_id: str):
     return (
         node_component("scoring/cosine_trial_scores"),
-        node_component(metric_node),
+        node_component(metric_node_id),
     )
 
 
-def _computation_node_ids(metrics: tuple[str, ...]) -> tuple[str, ...]:
+def _computation_node_ids(
+    metrics: tuple[str, ...], metric_node_ids: dict[str, str]
+) -> tuple[str, ...]:
     node_ids: list[str] = []
     for metric in metrics:
-        for node_id in component_trace_ids(_components_for_metric(metric)):
+        for node_id in component_trace_ids(_components_for_metric(metric, metric_node_ids[metric])):
             if node_id not in node_ids:
                 node_ids.append(node_id)
     return tuple(node_ids)

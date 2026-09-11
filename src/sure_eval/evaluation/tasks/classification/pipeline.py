@@ -24,6 +24,7 @@ def evaluate_classification_files(
     *,
     task: str = "classification",
     label_spec: LabelSpec | str | Path | dict | None = None,
+    scorer: str | None = None,
 ) -> EvaluationReport:
     """Evaluate aligned classification labels with a dataset label spec."""
 
@@ -36,7 +37,8 @@ def evaluate_classification_files(
         }
     )
     _CLASSIFICATION_CONTRACT.validate(input_files)
-    _, scoring_result = score_classification_files(
+    scoring_callable, _scoring_node_id = _scoring_callable(scorer)
+    _, scoring_result = scoring_callable(
         ref_file=ref_file,
         hyp_file=hyp_file,
         label_spec=spec,
@@ -45,7 +47,7 @@ def evaluate_classification_files(
     result = scoring_result.details["result"]
     normalized_task = task.upper() if task.upper() in {"SER", "GR"} else task
     task_alias = normalized_task.lower()
-    components = (node_component("scoring/classify"),)
+    components = (node_component(scoring_result.node_id),)
     pipeline_id = build_atomic_pipeline_id(task_alias, "any", "accuracy", components)
     return EvaluationReport(
         task=normalized_task,
@@ -64,3 +66,17 @@ def evaluate_classification_files(
             "label_spec": spec.as_dict(),
         },
     )
+
+
+def _scoring_callable(scorer: str | None):
+    """Resolve the classification scoring node (builtin classify or external)."""
+
+    normalized = (scorer or "classify").lower().strip()
+    if normalized in {"", "classify", "scoring/classify"}:
+        return score_classification_files, "scoring/classify"
+    from sure_eval.evaluation.node_registry import get_registry
+
+    node_id = get_registry().find_by_selector("scoring", "scorer", normalized)
+    if node_id is not None:
+        return get_registry().build(node_id, task="classification"), node_id
+    raise ValueError(f"Unsupported classification scorer: {scorer}")

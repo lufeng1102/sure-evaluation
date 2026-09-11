@@ -44,14 +44,25 @@ def evaluate_s2tt_files(
     src_file: str | None = None,
     xcomet_runner: XCOMETRunner | None = None,
     bleurt_runner: BLEURTRunner | None = None,
+    scorer: str | None = None,
 ) -> EvaluationReport:
     """Evaluate S2TT key-text files through the configured task pipeline."""
 
     normalized_metric = metric.lower()
+    key_text_files = KeyTextFiles(ref_file=ref_file, hyp_file=hyp_file)
+
+    if scorer is not None:
+        return _evaluate_external_scorer(
+            key_text_files,
+            language=language,
+            metric=normalized_metric,
+            src_file=src_file,
+            scorer=scorer,
+        )
+
     if normalized_metric not in {"bleu", "bleu_char", "chrf", "xcomet_xl", "bleurt_20"}:
         raise ValueError(f"Unsupported S2TT metric: {metric}")
 
-    key_text_files = KeyTextFiles(ref_file=ref_file, hyp_file=hyp_file)
     if normalized_metric == "xcomet_xl":
         if src_file is None:
             raise ValueError("src_file is required for metric xcomet_xl")
@@ -113,3 +124,55 @@ def evaluate_s2tt_files(
             "input_files": input_files.as_dict(),
         },
     )
+
+
+def _evaluate_external_scorer(
+    key_text_files: KeyTextFiles,
+    *,
+    language: str,
+    metric: str,
+    src_file: str | None,
+    scorer: str,
+) -> EvaluationReport:
+    """Evaluate an external S2TT scoring node selected by route."""
+
+    scoring_callable, scoring_node_id = _external_scoring_callable(scorer)
+    input_files = EvaluationFiles.from_ref_hyp(
+        ref_file=key_text_files.ref_file,
+        hyp_file=key_text_files.hyp_file,
+    )
+    _SACREBLEU_CONTRACT.validate(input_files)
+    scoring_result = scoring_callable(
+        key_text_files,
+        language=language,
+        src_file=src_file,
+    )
+    result = scoring_result.details["result"]
+    components = (node_component(scoring_node_id),)
+    pipeline_id = build_atomic_pipeline_id("s2tt", language, metric, components)
+    return EvaluationReport(
+        task="S2TT",
+        language=language,
+        metric=metric,
+        score=float(result["score"]),
+        pipeline_id=pipeline_id,
+        pipeline_trace=(scoring_result,),
+        input_contract=_SACREBLEU_CONTRACT,
+        input_files=input_files,
+        computation_node_ids=component_trace_ids(components),
+        details={
+            "scoring_result": result,
+            "input_contract": _SACREBLEU_CONTRACT.as_dict(),
+            "input_files": input_files.as_dict(),
+        },
+    )
+
+
+def _external_scoring_callable(scorer: str):
+    from sure_eval.evaluation.node_registry import get_registry
+
+    normalized = scorer.lower().strip()
+    node_id = get_registry().find_by_selector("scoring", "scorer", normalized)
+    if node_id is not None:
+        return get_registry().build(node_id), node_id
+    raise ValueError(f"Unsupported S2TT scorer: {scorer}")

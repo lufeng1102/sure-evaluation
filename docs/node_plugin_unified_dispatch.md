@@ -470,25 +470,27 @@ frontend）此前经 `audio_semantic` 硬编码 dispatch，speaker/MOS 经
 
 至此 §8 五步推广全部落地：VAD → SA-ASR → SE/TSE → TTS/VC → ASR 载荷收敛。
 
-### 9.5 后续 backlog（未纳入本方案，保持现状）
+### 9.5 收尾：六 executor 外部节点 dispatch 收敛（已完成）
 
-`classification` / `kws` / `s2tt` / `sd` / `slu` / `sv` 六个 task 各有独立
-executor（`evaluate_*_files`），其 normalization/scoring 仍是模块内硬编码
-import + 调用（无 registry fallback）。它们不在 §8 推广路径内（本方案先覆盖
-「契约形态有代表性」的 7 个 task），列为后续 backlog，按同一模式逐个补齐：
+§9.4 之后，`classification` / `kws` / `s2tt` / `sd` / `slu` / `sv` 六个 task 的
+executor 仍为模块内硬编码 import（无 registry fallback），与「route 已能注册
+外部节点」形成静默不一致。本节按 ASR 的「内置 if-elif + 末尾
+`find_by_selector(...)` + `registry.build(...)`」模式补齐，使六个 executor 全部
+支持外部节点动态 dispatch：
 
-| task | executor 文件 | 待接 registry fallback 的 dispatch 点 |
+| task | executor 文件 | 收敛后的 dispatch 点 |
 |---|---|---|
-| classification | `tasks/classification/pipeline.py` | `score_classification_files` 单一调用 |
-| kws | `tasks/kws/pipeline.py` | `score_wekws_det`（含 conversion 前置） |
-| s2tt | `tasks/s2tt/pipeline.py` | `normalized_metric` if-elif（sacrebleu / xcomet_xl / bleurt_20） |
-| sd | `tasks/sd/pipeline.py` | `score_meeteval` 单一调用 |
-| slu | `tasks/slu/pipeline.py` | `normalize_prompt_choice_files` + `score_classification_files` |
-| sv | `tasks/sv/pipeline.py` | `metric == "eer"` if-elif（cosine_trial → det_eer / min_dcf） |
+| classification | `tasks/classification/pipeline.py` | `_scoring_callable(scorer)`（scoring/classify） |
+| kws | `tasks/kws/pipeline.py` | `_scoring_callable(scorer)`（scoring/wekws_det，含 conversion 前置） |
+| s2tt | `tasks/s2tt/pipeline.py` | `_evaluate_external_scorer` + `_external_scoring_callable`（sacrebleu / xcomet_xl / bleurt_20 外兜底） |
+| sd | `tasks/sd/pipeline.py` | `_scoring_callable(scorer)`（scoring/meeteval） |
+| slu | `tasks/slu/pipeline.py` | `_normalization_callable` + `_scoring_callable`（prompt_norm + classify 双节点链） |
+| sv | `tasks/sv/pipeline.py` | `_metric_scoring_callable(metric, scorer)`（cosine_trial 前置 + det_eer / min_dcf 外兜底） |
 
-补齐模式与 SE/TSE 一致：内置 if-elif 保留，末尾接
-`find_by_selector(...)` + `registry.build(...)` fallback；每个 task 补一组
-「外部节点免改源码」单测；回归以 `metric routes` 的 `pipeline_id` 零变化为准。
+每个 task 的 scripts `run` 新增 `_executor_selectors_from_route`（内置节点 →
+硬编码 selector 值，外部节点 → 读 registration.selectors），并把 selector 透传给
+executor；每组补「外部节点免改源码」单测（`tests/test_*_unified_dispatch.py`，
+共 23 例）。内置路径的 `pipeline_id` 零变化（回归通过）。
 
 本次收尾另清除了 TSE/TTS/VC 中定义未调用的 `_node_name_for_metric` 死代码，
 并补 `tests/test_asr_unified_dispatch.py`（8 例）覆盖 ASR 外部 normalizer /

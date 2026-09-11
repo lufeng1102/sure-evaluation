@@ -65,8 +65,38 @@ def run(
         trial_manifest=trial_manifest,
         metrics=requested_metrics,
         work_dir=Path(output_dir),
+        scorers=_executor_scorers_from_routes(routes),
     )
     return write_route_run_outputs(report=report, description=description, output_dir=output_dir)
+
+
+def _executor_scorers_from_routes(routes: tuple[dict[str, Any], ...]) -> dict[str, str]:
+    scorers: dict[str, str] = {}
+    for route in routes:
+        metric = str(route.get("metric") or "")
+        for node_id in route.get("nodes") or ():
+            if node_id == "scoring/cosine_trial_scores":
+                continue
+            if node_id == "scoring/det_eer":
+                scorers[metric] = "det_eer"
+            elif node_id == "scoring/min_dcf_p005":
+                scorers[metric] = "min_dcf_p005"
+            else:
+                scorer = _external_scorer(node_id)
+                if scorer is not None:
+                    scorers[metric] = scorer
+    return scorers
+
+
+def _external_scorer(node_id: str) -> str | None:
+    from sure_eval.evaluation.node_registry import get_registry
+
+    try:
+        registration = get_registry().resolve(node_id)
+    except KeyError:
+        return None
+    scorer = registration.selectors.get("scorer")
+    return str(scorer) if scorer is not None else None
 
 
 def _select_routes(*, metrics: str | list[str] | tuple[str, ...] | None, pipeline_id: str | None):

@@ -53,14 +53,38 @@ def run(
         raise ValueError("output_dir is required")
     _, _, _, route, normalized_task = _select_route(task=task, pipeline_id=pipeline_id)
     description = describe_pipeline(task=normalized_task, metric="accuracy", pipeline_id=pipeline_id)
+    selectors = _executor_selectors_from_route(route)
     report = call_route_executor(
         route,
         ref_file=ref_file,
         hyp_file=hyp_file,
         task=normalized_task,
         label_spec=label_spec,
+        scorer=selectors.get("scorer"),
     )
     return write_route_run_outputs(report=report, description=description, output_dir=output_dir)
+
+
+def _executor_selectors_from_route(route: dict) -> dict[str, str]:
+    selectors: dict[str, str] = {}
+    for node_id in route.get("nodes") or ():
+        if node_id == "scoring/classify":
+            selectors["scorer"] = "classify"
+        else:
+            _apply_external_selectors(selectors, node_id)
+    return selectors
+
+
+def _apply_external_selectors(selectors: dict[str, str], node_id: str) -> None:
+    """Fallback: read selector hints from an external (plugin) node registration."""
+
+    from sure_eval.evaluation.node_registry import get_registry
+
+    try:
+        registration = get_registry().resolve(node_id)
+    except KeyError:
+        return
+    selectors.update({key: str(value) for key, value in registration.selectors.items()})
 
 
 def _select_route(*, task: str = "classification", pipeline_id: str | None = None):

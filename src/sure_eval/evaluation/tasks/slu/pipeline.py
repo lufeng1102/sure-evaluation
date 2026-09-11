@@ -26,6 +26,8 @@ def evaluate_slu_files(
     *,
     prompt_jsonl: str,
     output_mode: str = "choice_id",
+    normalizer: str | None = None,
+    scorer: str | None = None,
 ) -> EvaluationReport:
     """Evaluate SLU choices through prompt normalization then classify scoring."""
 
@@ -39,12 +41,14 @@ def evaluate_slu_files(
     _SLU_CONTRACT.validate(input_files)
     normalized = None
     try:
-        normalized, prompt_result = normalize_prompt_choice_files(
+        normalization_callable, _ = _normalization_callable(normalizer)
+        normalized, prompt_result = normalization_callable(
             KeyTextFiles(ref_file=ref_file, hyp_file=hyp_file),
             prompt_jsonl=prompt_jsonl,
             output_mode=output_mode,
         )
-        _, scoring_result = score_classification_files(
+        scoring_callable, _ = _scoring_callable(scorer)
+        _, scoring_result = scoring_callable(
             ref_file=normalized.ref_file,
             hyp_file=normalized.hyp_file,
             label_spec=default_label_spec("SLU"),
@@ -52,8 +56,8 @@ def evaluate_slu_files(
         )
         result = scoring_result.details["result"]
         components = (
-            node_component("normalization/prompt_norm", profile=output_mode),
-            node_component("scoring/classify"),
+            node_component(prompt_result.node_id, profile=output_mode),
+            node_component(scoring_result.node_id),
         )
         pipeline_id = build_atomic_pipeline_id("slu", "any", "accuracy", components)
         return EvaluationReport(
@@ -80,3 +84,31 @@ def evaluate_slu_files(
         if normalized is not None:
             Path(normalized.ref_file).unlink(missing_ok=True)
             Path(normalized.hyp_file).unlink(missing_ok=True)
+
+
+def _normalization_callable(normalizer: str | None):
+    """Resolve the SLU normalization node (builtin prompt_norm or external)."""
+
+    normalized = (normalizer or "prompt_norm").lower().strip()
+    if normalized in {"", "prompt_norm", "normalization/prompt_norm"}:
+        return normalize_prompt_choice_files, "normalization/prompt_norm"
+    from sure_eval.evaluation.node_registry import get_registry
+
+    node_id = get_registry().find_by_selector("normalization", "normalizer", normalized)
+    if node_id is not None:
+        return get_registry().build(node_id), node_id
+    raise ValueError(f"Unsupported SLU normalizer: {normalizer}")
+
+
+def _scoring_callable(scorer: str | None):
+    """Resolve the SLU scoring node (builtin classify or external)."""
+
+    normalized = (scorer or "classify").lower().strip()
+    if normalized in {"", "classify", "scoring/classify"}:
+        return score_classification_files, "scoring/classify"
+    from sure_eval.evaluation.node_registry import get_registry
+
+    node_id = get_registry().find_by_selector("scoring", "scorer", normalized)
+    if node_id is not None:
+        return get_registry().build(node_id, task="SLU"), node_id
+    raise ValueError(f"Unsupported SLU scorer: {scorer}")

@@ -47,8 +47,35 @@ def run(*, output_dir: str, **kwargs):
     _, _, _, route, normalized_metric = _select_route(
         metric=metric, input_mode=input_mode, pipeline_id=pipeline_id
     )
-    report = call_route_executor(route, metric=normalized_metric, **kwargs)
+    report = call_route_executor(
+        route,
+        metric=normalized_metric,
+        scorer=_executor_selectors_from_route(route).get("scorer"),
+        **kwargs,
+    )
     return write_route_run_outputs(report=report, description=description, output_dir=output_dir)
+
+
+def _executor_selectors_from_route(route: dict) -> dict[str, str]:
+    selectors: dict[str, str] = {}
+    for node_id in route.get("nodes") or ():
+        if node_id == "scoring/wekws_det":
+            selectors["scorer"] = "wekws_det"
+        elif not node_id.startswith("conversion/"):
+            _apply_external_selectors(selectors, node_id)
+    return selectors
+
+
+def _apply_external_selectors(selectors: dict[str, str], node_id: str) -> None:
+    """Fallback: read selector hints from an external (plugin) node registration."""
+
+    from sure_eval.evaluation.node_registry import get_registry
+
+    try:
+        registration = get_registry().resolve(node_id)
+    except KeyError:
+        return
+    selectors.update({key: str(value) for key, value in registration.selectors.items()})
 
 
 def _select_route(

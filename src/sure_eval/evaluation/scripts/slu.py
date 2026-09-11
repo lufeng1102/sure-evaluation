@@ -52,14 +52,41 @@ def run(
     _, _, _, route = _select_route(output_mode=output_mode, pipeline_id=pipeline_id)
     resolved_output_mode = str(route.get("output_mode") or output_mode)
     description = describe_pipeline(output_mode=resolved_output_mode, pipeline_id=pipeline_id)
+    selectors = _executor_selectors_from_route(route)
     report = call_route_executor(
         route,
         ref_file=ref_file,
         hyp_file=hyp_file,
         prompt_jsonl=prompt_jsonl,
         output_mode=resolved_output_mode,
+        normalizer=selectors.get("normalizer"),
+        scorer=selectors.get("scorer"),
     )
     return write_route_run_outputs(report=report, description=description, output_dir=output_dir)
+
+
+def _executor_selectors_from_route(route: dict) -> dict[str, str]:
+    selectors: dict[str, str] = {}
+    for node_id in route.get("nodes") or ():
+        if node_id == "normalization/prompt_norm":
+            selectors["normalizer"] = "prompt_norm"
+        elif node_id == "scoring/classify":
+            selectors["scorer"] = "classify"
+        else:
+            _apply_external_selectors(selectors, node_id)
+    return selectors
+
+
+def _apply_external_selectors(selectors: dict[str, str], node_id: str) -> None:
+    """Fallback: read selector hints from an external (plugin) node registration."""
+
+    from sure_eval.evaluation.node_registry import get_registry
+
+    try:
+        registration = get_registry().resolve(node_id)
+    except KeyError:
+        return
+    selectors.update({key: str(value) for key, value in registration.selectors.items()})
 
 
 def _select_route(*, output_mode: str = "choice_id", pipeline_id: str | None = None):

@@ -22,6 +22,7 @@ def evaluate_sd_files(
     *,
     metric: str = "der",
     collar: float = 0.25,
+    scorer: str | None = None,
 ) -> EvaluationReport:
     """Evaluate speaker diarization annotations with MeetEval DER."""
 
@@ -30,14 +31,15 @@ def evaluate_sd_files(
         raise ValueError(f"Unsupported SD metric: {metric}")
     input_files = EvaluationFiles.from_ref_hyp(ref_file=ref_file, hyp_file=hyp_file)
     _SD_CONTRACT.validate(input_files)
-    _, scoring_result = score_meeteval(
+    scoring_callable, _scoring_node_id = _scoring_callable(scorer)
+    _, scoring_result = scoring_callable(
         ref_file=ref_file,
         hyp_file=hyp_file,
         metric="der",
         collar=collar,
     )
     result = scoring_result.details["result"]
-    components = (node_component("scoring/meeteval"),)
+    components = (node_component(scoring_result.node_id),)
     pipeline_id = build_atomic_pipeline_id("sd", "any", "der", components)
     return EvaluationReport(
         task="SD",
@@ -56,3 +58,17 @@ def evaluate_sd_files(
             "params": {"collar": collar},
         },
     )
+
+
+def _scoring_callable(scorer: str | None):
+    """Resolve the SD scoring node (builtin meeteval or external)."""
+
+    normalized = (scorer or "meeteval").lower().strip()
+    if normalized in {"", "meeteval", "scoring/meeteval"}:
+        return score_meeteval, "scoring/meeteval"
+    from sure_eval.evaluation.node_registry import get_registry
+
+    node_id = get_registry().find_by_selector("scoring", "scorer", normalized)
+    if node_id is not None:
+        return get_registry().build(node_id), node_id
+    raise ValueError(f"Unsupported SD scorer: {scorer}")

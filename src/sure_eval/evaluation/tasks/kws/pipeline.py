@@ -64,6 +64,7 @@ def evaluate_kws_samples(
     input_mode: str = "samples",
     input_contract: MetricInputContract | None = None,
     input_files: EvaluationFiles | None = None,
+    scorer: str | None = None,
 ) -> EvaluationReport:
     """Evaluate aligned KWS samples through the configured task pipeline."""
 
@@ -73,7 +74,8 @@ def evaluate_kws_samples(
     input_contract = input_contract or _WEKWS_DET_CONTRACT
     if input_files is not None:
         input_contract.validate(input_files)
-    scoring_result = score_wekws_det(
+    scoring_callable, scoring_node_id = _scoring_callable(scorer)
+    scoring_result = scoring_callable(
         samples,
         threshold=threshold,
         thresholds=thresholds,
@@ -81,7 +83,7 @@ def evaluate_kws_samples(
         macro_recall_false_alarms=macro_recall_false_alarms,
     )
     results = scoring_result.details["results"]
-    components = _identity_components(input_mode)
+    components = _identity_components(input_mode, scoring_node_id)
     pipeline_id = build_atomic_pipeline_id("kws", "any", metric, components)
     return EvaluationReport(
         task="KWS",
@@ -105,11 +107,25 @@ def evaluate_kws_samples(
     )
 
 
-def _identity_components(input_mode: str):
-    scoring = node_component("scoring/wekws_det")
+def _identity_components(input_mode: str, scoring_node_id: str):
+    scoring = node_component(scoring_node_id)
     if input_mode == "samples":
         return (scoring,)
     return (conversion_component(f"kws_{input_mode}_to_samples"), scoring)
+
+
+def _scoring_callable(scorer: str | None):
+    """Resolve the KWS scoring node (builtin wekws_det or external)."""
+
+    normalized = (scorer or "wekws_det").lower().strip()
+    if normalized in {"", "wekws_det", "scoring/wekws_det"}:
+        return score_wekws_det, "scoring/wekws_det"
+    from sure_eval.evaluation.node_registry import get_registry
+
+    node_id = get_registry().find_by_selector("scoring", "scorer", normalized)
+    if node_id is not None:
+        return get_registry().build(node_id), node_id
+    raise ValueError(f"Unsupported KWS scorer: {scorer}")
 
 
 def evaluate_kws_files(
@@ -125,6 +141,7 @@ def evaluate_kws_files(
     threshold_step: float = 0.01,
     metric: str = "accuracy",
     macro_recall_false_alarms: int = 0,
+    scorer: str | None = None,
 ) -> EvaluationReport:
     """Load supported KWS input files and evaluate them through the task route."""
 
@@ -192,4 +209,5 @@ def evaluate_kws_files(
         input_mode=input_mode,
         input_contract=input_contract,
         input_files=input_files,
+        scorer=scorer,
     )
