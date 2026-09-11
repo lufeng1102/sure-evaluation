@@ -470,12 +470,25 @@ frontend）此前经 `audio_semantic` 硬编码 dispatch，speaker/MOS 经
 
 至此 §8 五步推广全部落地：VAD → SA-ASR → SE/TSE → TTS/VC → ASR 载荷收敛。
 
-### 9.5 剩余边界（未纳入本方案）
+### 9.5 后续 backlog（未纳入本方案，保持现状）
 
 `classification` / `kws` / `s2tt` / `sd` / `slu` / `sv` 六个 task 各有独立
 executor（`evaluate_*_files`），其 normalization/scoring 仍是模块内硬编码
 import + 调用（无 registry fallback）。它们不在 §8 推广路径内（本方案先覆盖
-「契约形态有代表性」的 7 个 task），后续可按同样模式逐个补 registry fallback。
+「契约形态有代表性」的 7 个 task），列为后续 backlog，按同一模式逐个补齐：
+
+| task | executor 文件 | 待接 registry fallback 的 dispatch 点 |
+|---|---|---|
+| classification | `tasks/classification/pipeline.py` | `score_classification_files` 单一调用 |
+| kws | `tasks/kws/pipeline.py` | `score_wekws_det`（含 conversion 前置） |
+| s2tt | `tasks/s2tt/pipeline.py` | `normalized_metric` if-elif（sacrebleu / xcomet_xl / bleurt_20） |
+| sd | `tasks/sd/pipeline.py` | `score_meeteval` 单一调用 |
+| slu | `tasks/slu/pipeline.py` | `normalize_prompt_choice_files` + `score_classification_files` |
+| sv | `tasks/sv/pipeline.py` | `metric == "eer"` if-elif（cosine_trial → det_eer / min_dcf） |
+
+补齐模式与 SE/TSE 一致：内置 if-elif 保留，末尾接
+`find_by_selector(...)` + `registry.build(...)` fallback；每个 task 补一组
+「外部节点免改源码」单测；回归以 `metric routes` 的 `pipeline_id` 零变化为准。
 
 本次收尾另清除了 TSE/TTS/VC 中定义未调用的 `_node_name_for_metric` 死代码，
 并补 `tests/test_asr_unified_dispatch.py`（8 例）覆盖 ASR 外部 normalizer /
