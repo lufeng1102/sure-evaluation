@@ -8,7 +8,7 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 import typer
 from rich.console import Console
@@ -34,6 +34,7 @@ from sure_eval.evaluation.env_check import (
     raise_if_environment_failed,
 )
 from sure_eval.evaluation.node_commands import create_node, list_nodes
+from sure_eval.evaluation.node_registry import get_registry
 
 metric_app = typer.Typer(help="Discover, describe, and run versioned evaluation pipelines")
 env_app = typer.Typer(help="Inspect and prepare optional node-local environments")
@@ -57,6 +58,11 @@ def describe_metric_pipeline(
     output: Optional[Path] = typer.Option(
         None, "--output", "-o", help="Write pipeline JSON to this path"
     ),
+    extra_node_path: Optional[List[str]] = typer.Option(
+        None,
+        "--extra-node-path",
+        help="Extra node module path(s) or dir(s) to resolve nodes against (repeatable)",
+    ),
     json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON"),
 ) -> None:
     """Describe a route-backed metric pipeline without executing it."""
@@ -64,6 +70,8 @@ def describe_metric_pipeline(
     try:
         if pipeline_id and (metric or metrics):
             raise ValueError("Use either --pipeline-id or --metric/--metrics, not both")
+        if extra_node_path:
+            get_registry().local_paths = tuple(extra_node_path)
         selected_metric = metrics or metric
         payload = build_pipeline_spec(
             task,
@@ -181,12 +189,19 @@ def run_metric_pipeline(
     validate_env: bool = typer.Option(
         False, "--validate-env", help="Validate selected node-local environments before running"
     ),
+    extra_node_path: Optional[List[str]] = typer.Option(
+        None,
+        "--extra-node-path",
+        help="Extra node module path(s) or dir(s) to resolve nodes against (repeatable)",
+    ),
     json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON"),
 ) -> None:
     """Run a previously described metric pipeline."""
 
     try:
         payload = read_json(pipeline)
+        if extra_node_path:
+            get_registry().local_paths = tuple(extra_node_path)
         if validate_env:
             env_results = check_pipeline_environment(payload)
             raise_if_environment_failed(env_results)

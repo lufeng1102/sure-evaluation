@@ -198,19 +198,31 @@ normalization 节点同理（`SELECTORS = {"normalizer": ...}`，node 返回归�
 两个外部节点的 `SELECTORS` 会分别被读成 `normalizer=lowercase_norm` 与
 `scorer=exact_match`，走 registry fallback dispatch。
 
-## 4. 本地路径加载（零安装，适合调试）
+## 4. 本地路径加载（节点零安装，适合调试）
 
-不改 `pyproject.toml`、不 `pip install`，直接把 `node.py`（或含 `node.py` 的
-目录）传给 `--extra-node-path`：
+节点模块可不用打包成 wheel：把 `node.py`（或含 `node.py` 的目录）传给
+`--extra-node-path`（可重复多次），`metric describe` / `metric run` 时
+`NodeRegistry` 按本地路径动态 `import`，无需 `pip install`。
 
 ```bash
+sure-eval metric describe asr --language en --metric wer \
+  --extra-node-path ./my_norm.py \
+  --output pipeline.json
+
 sure-eval metric run --pipeline pipeline.json \
-  --extra-node-path ./my_norm.py \          # 或 ./my_norm_pkg/（含 node.py）
+  --extra-node-path ./my_norm.py \
   --ref-file ref.txt --hyp-file hyp.txt --output-dir out
 ```
 
-pipeline 里 `selected` 用 `normalization/my_norm` 引用；`NodeRegistry.resolve`
-发现它既非内置也非已装插件，就按本地路径动态 `import_module` 加载。
+本地节点要进入运行链，仍需一个 route 引用它的 node_id（route 写在
+`tasks/*/routes.yaml` 或经 `sure_eval.routes` entry point 注入）；
+`--extra-node-path` 只负责「节点模块的运行时加载」，不负责「route 注册」。
+describe 时本地节点会出现在对应 slot 的 `choices` 里，executor 的
+`find_by_selector` / `build` 自动按 `--extra-node-path` 解析。
+
+> 注意：不能靠「改 `pipeline.json` 里 slot 的 `selected`」切换节点——run 阶段
+> 会校验 `selected` 与 `pipeline_id` 的节点链一致（保证可复现身份）。要用
+> 本地节点，就在 route 里声明它的 node_id 并带上 `--extra-node-path`。
 
 ## 5. 各 task 的外部节点要点
 

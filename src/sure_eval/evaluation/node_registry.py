@@ -56,6 +56,11 @@ class NodeRegistry:
 
     def __init__(self, nodes_root: Path = NODES_ROOT) -> None:
         self.nodes_root = nodes_root
+        # Session-scoped extra node paths (``--extra-node-path``).  Once set on
+        # the ``get_registry()`` singleton, every ``resolve``/``build``/
+        # ``find_by_selector``/``find_node_by_name`` call resolves against them
+        # without executors passing the paths explicitly.
+        self.local_paths: tuple[str | Path, ...] = ()
 
     # ---- builtin discovery ----
 
@@ -97,6 +102,9 @@ class NodeRegistry:
         for name, value in self.iter_entry_point_specs():
             if name == node_id:
                 return self._module_registration(value, node_id, source="entry_point").manifest
+        for reg in self._local_registrations():
+            if reg.node_id == node_id:
+                return reg.manifest
         raise KeyError(f"Unknown node: {node_id!r}")
 
     def manifest_path(self, node_id: str) -> Path:
@@ -107,6 +115,11 @@ class NodeRegistry:
             if name == node_id:
                 module = _import_cached(value)
                 return Path(module.__file__).resolve()
+        for local_path in self.local_paths:
+            reg = self._local_registration(local_path)
+            if reg is not None and reg.node_id == node_id:
+                p = Path(local_path)
+                return (p / "node.py" if p.is_dir() else p).resolve()
         raise KeyError(f"Unknown node: {node_id!r}")
 
     def node_env(self, node_id: str) -> dict[str, Any] | None:
@@ -117,11 +130,15 @@ class NodeRegistry:
         for name, value in self.iter_entry_point_specs():
             if name == node_id:
                 return self._module_registration(value, node_id, source="entry_point").node_env
+        for reg in self._local_registrations():
+            if reg.node_id == node_id:
+                return reg.node_env
         return None
 
     def iter_node_ids(self) -> tuple[str, ...]:
         ids = set(self.discover_builtin_node_ids())
         ids.update(name for name, _ in self.iter_entry_point_specs())
+        ids.update(reg.node_id for reg in self._local_registrations())
         return tuple(sorted(ids))
 
     def iter_env_node_ids(self) -> tuple[str, ...]:
@@ -136,6 +153,9 @@ class NodeRegistry:
             reg = self._module_registration(value, name, source="entry_point")
             if reg.node_env is not None:
                 ids.add(name)
+        for reg in self._local_registrations():
+            if reg.node_env is not None:
+                ids.add(reg.node_id)
         return tuple(sorted(ids))
 
     def find_by_selector(self, stage: str, key: str, value: Any) -> str | None:
@@ -143,23 +163,30 @@ class NodeRegistry:
 
         External nodes may declare ``SELECTORS = {"normalizer": "my_norm"}``
         (or ``{"scorer": "my_scorer"}``).  This lets a task dispatch an unknown
-        selector string to the right node without hardcoding it.
+        selector string to the right node without hardcoding it.  Local-path
+        nodes are considered after entry-point nodes.
         """
 
         for name, module_path in self.iter_entry_point_specs():
             reg = self._module_registration(module_path, name, source="entry_point")
             if reg.stage == stage and reg.selectors.get(key) == value:
                 return name
+        for reg in self._local_registrations():
+            if reg.stage == stage and reg.selectors.get(key) == value:
+                return reg.node_id
         return None
 
     def find_node_by_name(self, stage: str, name: str) -> str | None:
-        """Resolve a node id from its stage and name (builtin or entry point)."""
+        """Resolve a node id from its stage and name (builtin, entry point, or local path)."""
 
         node_id = f"{stage}/{name}"
         if self._builtin_manifest_path(node_id) is not None:
             return node_id
         for ep_name, _ in self.iter_entry_point_specs():
             if ep_name == node_id:
+                return node_id
+        for reg in self._local_registrations():
+            if reg.node_id == node_id:
                 return node_id
         return None
 
@@ -178,15 +205,16 @@ class NodeRegistry:
         for name, value in self.iter_entry_point_specs():
             if name == node_ref:
                 return self._module_registration(value, node_ref, source="entry_point")
-        # ③ local paths
-        for path in local_paths or ():
+        # ③ local paths (explicit argument wins over the session-scoped set)
+        paths = local_paths if local_paths is not None else self.local_paths
+        for path in paths:
             reg = self._local_registration(path)
             if reg is not None and reg.node_id == node_ref:
                 return reg
         raise KeyError(f"Unknown node reference: {node_ref!r}")
 
-    def build(self, node_id: str, **config: Any) -> Any:
-        reg = self.resolve(node_id)
+    def build(self, node_id: str, *, local_paths: list[str | Path] | None = None, **config: Any) -> Any:
+        reg = self.resolve(node_id, local_paths=local_paths)
         if reg.build is None:
             raise NotImplementedError(f"Node {node_id} has no 'build' factory")
         node = reg.build(**config)
@@ -257,6 +285,15 @@ class NodeRegistry:
         except (ImportError, OSError, ValueError):
             return None
         return registration_from_module(module, source="local")
+
+    def _local_registrations(self) -> list[NodeRegistration]:
+        """Registration for every session-scoped local node path (skipping invalid)."""
+        regs: list[NodeRegistration] = []
+        for path in self.local_paths:
+            reg = self._local_registration(path)
+            if reg is not None:
+                regs.append(reg)
+        return regs
 
 
 _registry: NodeRegistry | None = None

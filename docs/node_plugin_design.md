@@ -46,9 +46,10 @@
 
 ## 4. 用户如何注册节点
 
-### 4.1 方式 A：本地路径加载（零安装）
+### 4.1 方式 A：本地路径加载（节点零安装）
 
-最轻量，适合开发调试，无需 `pip install`：
+最轻量，适合开发调试，节点模块无需 `pip install` 打包，`metric describe` /
+`metric run` 传 `--extra-node-path`（可重复多次）：
 
 ```bash
 sure-eval metric run --pipeline p.json \
@@ -56,8 +57,10 @@ sure-eval metric run --pipeline p.json \
   --ref-file ref.txt --hyp-file hyp.txt --output-dir out
 ```
 
-`p.json` 里 `selected` 用 `normalization/my_norm` 引用；`NodeRegistry.resolve` 发现
-它不是内置也不是已装插件，就按本地路径动态 `import_module` 加载。
+`--extra-node-path` 让 `NodeRegistry` 在「内置 / entry point」之外按本地路径动态
+`import` 节点模块。节点要进入运行链，仍需一个 route 在 `nodes` 里引用它的
+node_id（route 写在 `tasks/*/routes.yaml` 或经 `sure_eval.routes` entry point 注入）；
+`--extra-node-path` 只负责节点模块的运行时加载，不负责 route 注册。
 
 ### 4.2 方式 B：entry point 安装（正式分发）
 
