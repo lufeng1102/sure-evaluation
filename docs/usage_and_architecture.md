@@ -884,11 +884,15 @@ pip install -e plugins/my_norm        # 安装后进入 node list 与 describe c
 ```
 
 外部节点声明 `profiles.default_for: ["ASR/en/wer"]` 后，会自动出现在
-`metric describe asr --language en --metric wer` 的 normalization slot choices 中；
-在 `routes.yaml` 里引用它（node 条目写 `normalization/<name>`）即可 `metric run`。
+`metric describe asr --language en --metric wer` 的 normalization slot choices 中。
+
+接入 pipeline 运行：外部包通过 `[project.entry-points."sure_eval.routes"]`
+声明 route（name=task，value=暴露 `ROUTES` 列表的模块），`pip install` 后 route
+自动合并进 `metric routes` / `describe` / `run`，无需改动仓库的 `routes.yaml`。
 
 完整示例：`examples/node_plugin_lowercase/`（normalization）与
-`examples/node_plugin_exact_match/`（scoring），两者可组合端到端运行。
+`examples/node_plugin_exact_match/`（scoring），每个包同时注册节点与 route，
+安装后即可端到端运行。
 
 > 提交规范：`.venv/`、`**/checkpoints/`、模型权重（`*.ckpt`/`*.pt`/`*.onnx`/
 > `*.safetensors`/`*.bin`）、运行时日志与本地结果目录均被 `.gitignore` 排除，

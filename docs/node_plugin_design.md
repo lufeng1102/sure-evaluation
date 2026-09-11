@@ -136,49 +136,63 @@ def build(*, language=None, profile="lowercase", **config):
 节点被 `node list` / registry 发现后，还需**接入一条 pipeline** 才能真正参与
 评分。两种方式：
 
-- **声明式（routes.yaml 引用）**：在 `tasks/<task>/routes.yaml` 加一条 route，
-  `nodes` 直接写外部节点 id——正式、可复现，推荐。
+- **entry point 注入 route（推荐，不改源码）**：外部包通过 `sure_eval.routes`
+  entry point 声明 route 片段，`pip install` 后自动合并进 `metric routes` /
+  `describe` / `run`，无需改动仓库的 `routes.yaml`。
 - **describe 聚合**：节点声明 `profiles.default_for`（如 `ASR/en/wer`）后，自动
   进入对应 task/lang/metric 的 `metric describe` slot choices。
 
-下面用仓库自带的两个示例节点组合，走通「注册 → 描述 → 运行」全流程：
+下面用仓库自带的两个示例节点，走通「安装 → 注入 route → 描述 → 运行」全流程：
 
 - **normalization**：`examples/node_plugin_lowercase`（英文小写归一化，声明
   `SELECTORS = {"normalizer": "lowercase_norm"}`）
 - **scoring**：`examples/node_plugin_exact_match`（逐行完全匹配打分，声明
   `SELECTORS = {"scorer": "exact_match"}`）
 
+每个包除节点外，还声明一条 route（`pyproject.toml` 里
+`[project.entry-points."sure_eval.routes"]` → 模块暴露 `ROUTES` 列表）。以
+lowercase 包为例：
+
+```toml
+# pyproject.toml
+[project.entry-points."sure_eval.routes"]
+asr = "sure_eval_node_lowercase.routes"
+```
+
+```python
+# sure_eval_node_lowercase/routes.py
+ROUTES = [
+    {
+        "language": "en",
+        "metric": "wer",
+        "pipeline_id": "asr.en.wer.lowercase_norm_v1.wenet_wer_v1",
+        "nodes": ["normalization/lowercase_norm", "scoring/wenet_wer"],
+        "input_contract": "scoring/wenet_wer",
+        "executor": "sure_eval.evaluation.tasks.asr.pipeline.evaluate_asr_files",
+    },
+]
+```
+
 ```bash
-# 1. 安装两个示例插件（entry point 注册，见 4.2）
+# 1. 安装两个示例插件（节点 + route 一起注册，无需改任何仓库文件）
 pip install -e examples/node_plugin_lowercase
 pip install -e examples/node_plugin_exact_match
 
-# 2. 在 tasks/asr/routes.yaml 追加一条 route（nodes 写外部节点 id）
-```
+# 2. 新 route 已出现在 metric routes（lowercase_norm / exact_match 各一条）
+sure-eval metric routes asr --language en --metric wer --json
+#   asr.en.wer.lowercase_norm_v1.wenet_wer_v1
+#   asr.en.wer.whisper_norm_english_v1.exact_match_v1
 
-```yaml
-  -
-    language: en
-    metric: wer
-    pipeline_id: asr.en.wer.lowercase_norm_v1.exact_match_v1
-    nodes:
-      - normalization/lowercase_norm
-      - scoring/exact_match
-    input_contract: scoring/wenet_wer
-    executor: sure_eval.evaluation.tasks.asr.pipeline.evaluate_asr_files
-```
-
-```bash
-# 3. 描述 + 运行
-sure-eval metric describe asr --pipeline-id asr.en.wer.lowercase_norm_v1.exact_match_v1 \
+# 3. 直接描述 + 运行
+sure-eval metric describe asr --pipeline-id asr.en.wer.lowercase_norm_v1.wenet_wer_v1 \
   --output p.json
 sure-eval metric run --pipeline p.json --ref-file ref.txt --hyp-file hyp.txt \
   --output-dir out
 ```
 
-结果：`pipeline_id = asr.en.wer.lowercase_norm_v1.exact_match_v1`，报告 trace 为
-`normalization/lowercase_norm → scoring/exact_match`，score 由 exact_match 给出
-（`hyp` 先小写归一化再逐行比对）。
+框架侧 `load_task_routes` 读取内置 `routes.yaml` 后，再合并 `sure_eval.routes`
+entry point 里 `name == task` 的模块 `ROUTES`；由于它是 `metric routes` /
+`describe` / `run` 的唯一路由入口，注入一处即全链路生效。
 
 > `input_contract` 引用 task manifest 里**已声明**的输入契约（描述输入角色/格式，
 > 如 `scoring/wenet_wer` 的 `hyp`+`ref` key_text），与 scoring 节点实现解耦；
@@ -188,17 +202,18 @@ sure-eval metric run --pipeline p.json --ref-file ref.txt --hyp-file hyp.txt \
 
 1. route 的 `nodes` 条目经 `scripts/asr.py::_executor_selectors_from_route` 解析：
    内置节点命中 if-elif，外部节点落入 fallback `_apply_external_selectors`，读
-   `registration.selectors`（即 `SELECTORS`），得到 `normalizer=lowercase_norm`、
-   `scorer=exact_match`。
+   `registration.selectors`（即 `SELECTORS`），得到 `normalizer=lowercase_norm`。
 2. `tasks/asr/pipeline.py::evaluate_asr_files` 的 `_normalization_node` /
    `_scoring_node` 经 registry fallback 按 node_id `resolve` 并 `build` 出 callable。
 3. `run_pipeline` 顺序执行，报告 trace 记录外部节点。
 
-两个声明各司其职：
+三种声明各司其职：
 
 - `SELECTORS`：让任务 dispatch 按 selector 字符串找到本节点（接入 `metric run`）。
 - `profiles.default_for`：让 `metric describe` 的 choices 按 task/lang/metric 聚合
   展示本节点（接入 describe 候选）。
+- `ROUTES`（route 模块）：声明外部节点的 pipeline 路由，`pip install` 即注入，
+  无需改仓库 `routes.yaml`。
 
 ## 5. 目标架构：多来源 `resolve`
 
@@ -232,6 +247,9 @@ describe → pipeline.json → run_pipeline（现有流程不变）
 - **6.5 环境集成**：`NodeEnvChecker` / `iter_known_node_ids` 读外部 `NODE_ENV`，
   对齐 `env download`。
 - **6.6 CLI 脚手架**：`sure-eval node create` / `node list` 生成与列举插件。
+- **6.7 route 注入**：`load_task_routes` 读取内置 `routes.yaml` 后，合并
+  `sure_eval.routes` entry point（name=task、模块暴露 `ROUTES` 列表），外部 route
+  免改仓库 `routes.yaml`，`metric routes`/`describe`/`run` 全链路生效。
 
 ## 7. 分阶段实施
 
@@ -288,4 +306,5 @@ describe → pipeline.json → run_pipeline（现有流程不变）
 | Phase 2 | ✅ 已完成 | 动态 dispatch（ASR 6 处 if-elif 加 registry fallback，外部节点可跑通） |
 | Phase 3 | ✅ 已完成 | describe 聚合 + CLI 脚手架（choices 按 default_for 聚合；node create/list） |
 | Phase 4 | ✅ 已完成 | env 集成 + 示例包 + 文档 |
-| 测试与示例 | ✅ 已完成 | 30 个单元测试（protocol/registry/commands）+ lowercase/exact_match 示例包 |
+| 测试与示例 | ✅ 已完成 | 33 个单元测试（protocol/registry/commands/route-injection）+ lowercase/exact_match 示例包 |
+| route 注入 | ✅ 已完成 | `load_task_routes` 聚合 `sure_eval.routes` entry point，免改 routes.yaml |

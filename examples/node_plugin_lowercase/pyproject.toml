@@ -10,5 +10,8 @@ requires-python = ">=3.10"
 [project.entry-points."sure_eval.nodes"]
 "normalization/lowercase_norm" = "sure_eval_node_lowercase.node"
 
+[project.entry-points."sure_eval.routes"]
+asr = "sure_eval_node_lowercase.routes"
+
 [tool.setuptools]
 packages = ["sure_eval_node_lowercase"]

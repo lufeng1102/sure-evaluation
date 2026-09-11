@@ -86,7 +86,36 @@ def load_task_manifest(task: str) -> tuple[dict[str, Any], Path]:
 
 def load_task_routes(task: str) -> tuple[dict[str, Any], Path]:
     path = TASKS_ROOT / task.lower() / "routes.yaml"
-    return load_yaml(path), path
+    routes = load_yaml(path)
+    routes.setdefault("routes", []).extend(_load_external_routes(task))
+    return routes, path
+
+
+def _load_external_routes(task: str) -> list[dict[str, Any]]:
+    """Collect plugin-declared routes for ``task`` from the ``sure_eval.routes`` entry point.
+
+    A plugin package declares ``[project.entry-points."sure_eval.routes"]`` with the
+    task name as the entry point name and a module path as its value; that module
+    exposes a ``ROUTES`` list of route dicts (same shape as a ``routes.yaml`` item).
+    """
+    from importlib.metadata import entry_points
+
+    collected: list[dict[str, Any]] = []
+    try:
+        specs = entry_points(group="sure_eval.routes")
+    except TypeError:  # pragma: no cover - Python < 3.10 fallback
+        specs = entry_points().get("sure_eval.routes", [])
+    for spec in specs:
+        if spec.name != task:
+            continue
+        try:
+            module = import_module(spec.value)
+        except (ImportError, AttributeError):
+            continue
+        for route in getattr(module, "ROUTES", None) or ():
+            if isinstance(route, dict):
+                collected.append(dict(route))
+    return collected
 
 
 def find_task_route(

@@ -10,5 +10,8 @@ requires-python = ">=3.10"
 [project.entry-points."sure_eval.nodes"]
 "scoring/exact_match" = "sure_eval_node_exact_match.node"
 
+[project.entry-points."sure_eval.routes"]
+asr = "sure_eval_node_exact_match.routes"
+
 [tool.setuptools]
 packages = ["sure_eval_node_exact_match"]
