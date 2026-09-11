@@ -97,7 +97,7 @@ def evaluate_tse_samples(
 
     mos_providers = dict(mos_providers or {})
     for metric_name in [
-        metric for metric in requested_metrics if metric in {"dnsmos", "wv-mos", "utmos"}
+        metric for metric in requested_metrics if _scoring_family(metric) == "mos"
     ]:
         mos_result = _evaluate_mos(
             samples,
@@ -163,7 +163,7 @@ def evaluate_tse_samples(
         for metric in requested_metrics
         if metric not in result_keys
         and metric not in {"tse_wer", "tse_cer"}
-        and not _is_speaker_metric(metric)
+        and _scoring_family(metric) is None
         and metric != "si_sdr"
     ]
     if unsupported:
@@ -509,5 +509,28 @@ def _base_row(sample: TSESample) -> dict[str, Any]:
     }
 
 
+_SPEAKER_METRICS = {"sim/wavlm-large", "sim/ecapa-tdnn", "sim/eres2net"}
+_MOS_METRICS = {"dnsmos", "wv-mos", "utmos"}
+
+
+def _scoring_family(metric_name: str) -> str | None:
+    """Classify a scoring metric as ``speaker`` or ``mos`` (builtin or external)."""
+    if metric_name in _SPEAKER_METRICS:
+        return "speaker"
+    if metric_name in _MOS_METRICS:
+        return "mos"
+    from sure_eval.evaluation.node_registry import get_registry
+
+    registry = get_registry()
+    # Speaker metrics arrive as ``sim/<backend>``; the selector value is the bare
+    # backend name (matching the dispatch helper's `backend_name` argument).
+    backend = metric_name.removeprefix("sim/")
+    if registry.find_by_selector("scoring", "speaker", backend) is not None:
+        return "speaker"
+    if registry.find_by_selector("scoring", "mos", metric_name) is not None:
+        return "mos"
+    return None
+
+
 def _is_speaker_metric(metric_name: str) -> bool:
-    return metric_name in {"sim/wavlm-large", "sim/ecapa-tdnn", "sim/eres2net"}
+    return _scoring_family(metric_name) == "speaker"

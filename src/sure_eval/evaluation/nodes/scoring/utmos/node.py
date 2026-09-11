@@ -88,5 +88,18 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+
+
+
+def build(*, provider=None, device="cuda", **config):
+    """Build a provider-backed node factory around :func:`score_utmos`."""
+
+    def node(rows):
+        resolved = provider if provider is not None else build_default_provider(device=device)
+        return score_utmos(rows, provider=resolved)
+
+    return node
+
+
 if __name__ == "__main__":
     raise SystemExit(main())

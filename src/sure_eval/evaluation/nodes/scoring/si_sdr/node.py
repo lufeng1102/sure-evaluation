@@ -251,5 +251,17 @@ def _read_rows(path: str) -> tuple[list[SignalRow], list[str], bool]:
     return rows, mixed_paths, provider_mode
 
 
+
+
+
+def build(*, provider=None, mixed_paths=None, **config):
+    """Build a node factory around :func:`score_si_sdr` (provider-backed or native)."""
+
+    def node(rows):
+        return score_si_sdr(rows, provider=provider, mixed_paths=mixed_paths)
+
+    return node
+
+
 if __name__ == "__main__":
     raise SystemExit(main())

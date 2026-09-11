@@ -93,5 +93,18 @@ def _read_rows(path: str) -> list[FullReferenceAudioRow]:
     return rows
 
 
+
+
+
+def build(*, provider=None, **config):
+    """Build a provider-backed node factory around :func:`score_stoi`."""
+
+    def node(rows):
+        resolved = provider if provider is not None else build_default_provider()
+        return score_stoi(rows, provider=resolved)
+
+    return node
+
+
 if __name__ == "__main__":
     raise SystemExit(main())

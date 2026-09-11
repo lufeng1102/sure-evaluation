@@ -30,6 +30,11 @@ def score_speaker_metric(
         return score_ecapa_tdnn_sim(rows, provider=provider)
     if backend_name == "eres2net":
         return score_eres2net_sim(rows, provider=provider)
+    from sure_eval.evaluation.node_registry import get_registry
+
+    node_id = get_registry().find_by_selector("scoring", "speaker", backend_name)
+    if node_id is not None:
+        return get_registry().build(node_id, provider=provider)(rows)
     raise ValueError(f"unsupported speaker similarity backend: {backend_name}")
 
 
@@ -45,6 +50,11 @@ def score_mos_metric(
         return score_wv_mos(rows, provider=provider)
     if metric_name == "utmos":
         return score_utmos(rows, provider=provider)
+    from sure_eval.evaluation.node_registry import get_registry
+
+    node_id = get_registry().find_by_selector("scoring", "mos", metric_name)
+    if node_id is not None:
+        return get_registry().build(node_id, provider=provider)(rows)
     raise ValueError(f"unsupported MOS metric: {metric_name}")
 
 
@@ -60,4 +70,9 @@ def score_full_reference_metric(
         return score_stoi(rows, provider=provider)
     if metric_name == "pesq":
         return score_pesq(rows, provider=provider)
+    from sure_eval.evaluation.node_registry import get_registry
+
+    node_id = get_registry().find_by_selector("scoring", "full_reference", metric_name)
+    if node_id is not None:
+        return get_registry().build(node_id, provider=provider)(rows)
     raise ValueError(f"unsupported full-reference audio metric: {metric_name}")

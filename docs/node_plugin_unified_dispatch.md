@@ -303,7 +303,7 @@ VAD 验证通过后，按「先契约简单、后契约复杂」的顺序推广�
 
 1. VAD（jsonl segments，本草案试点）✅ 已完成
 2. SA-ASR（key_text + 转写，混合契约）✅ 已完成
-3. SE / TSE（audio 打分）
+3. SE / TSE（audio 打分）✅ 已完成
 4. TTS / VC（frontend + transcription + normalization + scoring 复合链）
 5. 最后统一 ASR（把 `KeyTextFiles` 收敛到 `NodePayload`）
 
@@ -370,3 +370,42 @@ SA-ASR 的 normalization 是 `KeyTextFiles -> KeyTextFiles`（与 ASR 同构）�
 `metric run` 会因 `import meeteval` 失败——这是 pre-existing 环境限制，与本次迁移
 无关；executor 的 normalization 动态装配与 scoring 调用链已通过 mock meeteval 的
 单测与脚本验证。
+
+### 9.2 SE / TSE 推广（已完成）
+
+SE / TSE 的 scoring 节点是 provider-backed 的「audio 打分」契约：
+`list[Row] + provider -> PipelineNodeResult`（Row 为音频样本元组）。它们是第一类
+「非 KeyTextFiles / NodePayload」的契约，验证了统一 dispatch 在第三种载荷形态下
+同样成立。落地内容：
+
+- 9 个内置 scoring 节点（`si_sdr`/`stoi`/`pesq`/`dnsmos`/`wv_mos`/`utmos`/
+  `wavlm_large_sim`/`ecapa_tdnn_sim`/`eres2net_sim`）补 `build()` 工厂
+  （`node(rows) -> PipelineNodeResult`，provider 可由外部注入或由
+  `build_default_provider` 构造）。
+- `_audio_quality_dispatch` 三个函数（full-reference / MOS / speaker）在保留内置
+  if-elif 的同时，对未知 selector 走 `find_by_selector("scoring", family, value)` +
+  `registry.build` fallback。
+- SE executor：`_metric_family`（内置集合 + registry selector）判定
+  full-reference / MOS；`unsupported` 检查、dispatch 循环、`_default_reference_provider`
+  （外部节点返回 None，由节点 build 工厂自构 provider）、`_node_id_for_metric`
+  均加入 registry fallback。
+- TSE executor：`_scoring_family`（speaker 用去 `sim/` 前缀的 backend 名匹配
+  selector）判定 speaker / MOS；MOS dispatch 集合、`_is_speaker_metric`、
+  `unsupported` 检查加入 registry fallback。
+
+验收结果：
+
+1. **回归零变化**：SE 6 条、TSE zh/en 各 8 条 route 的 `pipeline_id` 与迁移前
+   逐字节一致；全量回归 376 passed + 51 skipped。
+2. **外部节点免改源码**：`examples/node_plugin_se_scoring`（外部
+   `scoring/sample_se_metric` + 注入 route）`pip install` 后经 registry 动态装配，
+   `evaluate_se_samples(metrics=["my-se-metric"])` 正确产出 `pipeline_id`
+   `se.any.my_se_metric.sample_se_metric_v1` 且 score=0.5，未改任何框架源码。
+3. **单测**：新增 `tests/test_se_tse_unified_dispatch.py`（8 例）覆盖 9 节点 build
+   工厂、dispatch 三族 fallback、`_metric_family`/`_scoring_family`/`_node_id_for_metric`
+   外部回退、SE executor 端到端外部 full-reference 指标。
+
+边界：SE/TSE 的语义链（TSE cer/wer 的 transcription→normalization→scoring 复合链）
+仍走 `audio_semantic` 独立 dispatch，不在本次 scoring 解耦范围内；TTS/VC 推广时
+一并处理。本机未装 `soundfile`，SE/TSE 的 `metric run`（真实音频打分）无法端到端
+跑通——pre-existing 环境限制；dispatch 链已通过 provider 契约单测与脚本验证。

@@ -58,7 +58,7 @@ def evaluate_se_samples(
         raise ValueError("at least one SE sample is required")
 
     requested_metrics = tuple(_normalize_metric(metric) for metric in (metrics or _DEFAULT_METRICS))
-    unsupported = [metric for metric in requested_metrics if metric not in _MOS_METRICS | _FULL_REFERENCE_METRICS]
+    unsupported = [metric for metric in requested_metrics if _metric_family(metric) is None]
     if unsupported:
         raise ValueError(f"Unsupported SE metric(s): {', '.join(unsupported)}")
 
@@ -68,32 +68,27 @@ def evaluate_se_samples(
     trace = []
 
     reference_providers = dict(reference_providers or {})
-    for metric_name in [metric for metric in requested_metrics if metric in _FULL_REFERENCE_METRICS]:
-        full_reference_result = _evaluate_full_reference(
-            samples,
-            rows,
-            metric_name=metric_name,
-            reference_providers=reference_providers,
-        )
-        full_reference_payload = dict(full_reference_result.details["result"])
-        full_reference_payload["metric_name"] = canonical_metric(metric_name)
-        full_reference_payload["execution_metric"] = metric_name
-        _store_result(results, result_keys, metric_name, full_reference_payload)
-        trace.append(full_reference_result)
-
     mos_providers = dict(mos_providers or {})
-    for metric_name in [metric for metric in requested_metrics if metric in _MOS_METRICS]:
-        mos_result = _evaluate_mos(
-            samples,
-            rows,
-            metric_name=metric_name,
-            mos_providers=mos_providers,
-        )
-        mos_payload = dict(mos_result.details["result"])
-        mos_payload["metric_name"] = canonical_metric(metric_name)
-        mos_payload["execution_metric"] = metric_name
-        _store_result(results, result_keys, metric_name, mos_payload)
-        trace.append(mos_result)
+    for metric_name in requested_metrics:
+        if _metric_family(metric_name) == "full_reference":
+            metric_result = _evaluate_full_reference(
+                samples,
+                rows,
+                metric_name=metric_name,
+                reference_providers=reference_providers,
+            )
+        else:
+            metric_result = _evaluate_mos(
+                samples,
+                rows,
+                metric_name=metric_name,
+                mos_providers=mos_providers,
+            )
+        metric_payload = dict(metric_result.details["result"])
+        metric_payload["metric_name"] = canonical_metric(metric_name)
+        metric_payload["execution_metric"] = metric_name
+        _store_result(results, result_keys, metric_name, metric_payload)
+        trace.append(metric_result)
 
     if not results:
         raise ValueError("No SE metrics were evaluated")
@@ -202,6 +197,21 @@ def _store_result(
     return result_key
 
 
+def _metric_family(metric_name: str) -> str | None:
+    """Classify a metric as ``full_reference`` or ``mos`` (builtin or external)."""
+    if metric_name in _FULL_REFERENCE_METRICS:
+        return "full_reference"
+    if metric_name in _MOS_METRICS:
+        return "mos"
+    from sure_eval.evaluation.node_registry import get_registry
+
+    registry = get_registry()
+    for family in ("full_reference", "mos"):
+        if registry.find_by_selector("scoring", family, metric_name) is not None:
+            return family
+    return None
+
+
 def _default_reference_provider(metric_name: str):
     if metric_name == "si-sdr":
         return SISDRProvider()
@@ -209,7 +219,8 @@ def _default_reference_provider(metric_name: str):
         return STOIProvider()
     if metric_name == "pesq":
         return PESQProvider()
-    raise ValueError(f"Unsupported SE full-reference metric: {metric_name}")
+    # External full-reference nodes build their own default provider via build().
+    return None
 
 
 def _input_contract_for_metrics(metrics: tuple[str, ...]) -> MetricInputContract:
@@ -266,14 +277,23 @@ def _atomic_pipeline_id(metric_name: str) -> str:
 
 
 def _node_id_for_metric(metric_name: str) -> str:
-    return {
+    builtin = {
         "si-sdr": "scoring/si_sdr",
         "stoi": "scoring/stoi",
         "pesq": "scoring/pesq",
         "dnsmos": "scoring/dnsmos",
         "wv-mos": "scoring/wv_mos",
         "utmos": "scoring/utmos",
-    }[metric_name]
+    }
+    if metric_name in builtin:
+        return builtin[metric_name]
+    from sure_eval.evaluation.node_registry import get_registry
+
+    family = _metric_family(metric_name)
+    node_id = get_registry().find_by_selector("scoring", family, metric_name)
+    if node_id is not None:
+        return node_id
+    raise KeyError(metric_name)
 
 
 def _zip_strict(*iterables):

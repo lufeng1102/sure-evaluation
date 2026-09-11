@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sure-eval-node-se-scoring"
+version = "0.1.0"
+requires-python = ">=3.10"
+
+[project.entry-points."sure_eval.nodes"]
+"scoring/sample_se_metric" = "sure_eval_node_se_scoring.node"
+
+[project.entry-points."sure_eval.routes"]
+se = "sure_eval_node_se_scoring.routes"
+
+[tool.setuptools]
+packages = ["sure_eval_node_se_scoring"]
