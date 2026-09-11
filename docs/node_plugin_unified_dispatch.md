@@ -468,5 +468,15 @@ frontend）此前经 `audio_semantic` 硬编码 dispatch，speaker/MOS 经
    `KeyTextFiles` 是 `NodePayload` 子类、`roles={"ref","hyp"}`、legacy 属性、
    `with_artifact` 保留子类类型、`from_payload`、ASR 载荷流经 `run_pipeline`。
 
-至此 §8 五步推广全部落地：VAD → SA-ASR → SE/TSE → TTS/VC → ASR 载荷收敛，
-统一执行模型覆盖全部任务族。
+至此 §8 五步推广全部落地：VAD → SA-ASR → SE/TSE → TTS/VC → ASR 载荷收敛。
+
+### 9.5 剩余边界（未纳入本方案）
+
+`classification` / `kws` / `s2tt` / `sd` / `slu` / `sv` 六个 task 各有独立
+executor（`evaluate_*_files`），其 normalization/scoring 仍是模块内硬编码
+import + 调用（无 registry fallback）。它们不在 §8 推广路径内（本方案先覆盖
+「契约形态有代表性」的 7 个 task），后续可按同样模式逐个补 registry fallback。
+
+本次收尾另清除了 TSE/TTS/VC 中定义未调用的 `_node_name_for_metric` 死代码，
+并补 `tests/test_asr_unified_dispatch.py`（8 例）覆盖 ASR 外部 normalizer /
+scorer 的 selector 规范化、节点工厂 dispatch、组件身份与端到端组合链。

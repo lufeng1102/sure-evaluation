@@ -26,6 +26,10 @@ focused guide for a new task, metric, route, node/tool version, or maintenance
 change. Use [Add Evaluation Capabilities](add_a_metric.md) when the category is
 unclear.
 
+To add a versioned node that ships outside the repository (a plugin), see
+[Add an External Node](add_external_node.md) — it walks through writing
+`node.py`, registering an entry point, injecting a route, and running the result.
+
 ## Agent Integration
 
 Agents and evaluation harnesses should follow the

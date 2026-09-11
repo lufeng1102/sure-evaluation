@@ -430,18 +430,6 @@ def _selected_metric_computation_nodes(
     return tuple(nodes)
 
 
-def _node_name_for_metric(metric_name: str) -> str:
-    return {
-        "si_sdr": "si_sdr",
-        "sim/wavlm-large": "wavlm_large_sim",
-        "sim/ecapa-tdnn": "ecapa_tdnn_sim",
-        "sim/eres2net": "eres2net_sim",
-        "dnsmos": "dnsmos",
-        "wv-mos": "wv_mos",
-        "utmos": "utmos",
-    }[metric_name]
-
-
 def _common_language(languages: list[str]) -> str:
     unique = {language for language in languages if language}
     if len(unique) != 1:
