@@ -71,6 +71,7 @@ def run(
         hyp_file=hyp_file,
         metric=normalized_metric,
         language=resolved_language,
+        nodes=tuple(route.get("computation_nodes") or route["nodes"]),
         conversion_output_dir=str(Path(output_dir) / "conversion" / "sa_asr__cpwer"),
         **params,
     )

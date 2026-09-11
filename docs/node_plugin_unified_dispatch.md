@@ -301,8 +301,8 @@ def run_pipeline(spec, payload) -> tuple[Any, tuple[PipelineNodeResult, ...]]: .
 
 VAD 验证通过后，按「先契约简单、后契约复杂」的顺序推广：
 
-1. VAD（jsonl segments，本草案试点）
-2. SA-ASR（key_text + 转写，混合契约）
+1. VAD（jsonl segments，本草案试点）✅ 已完成
+2. SA-ASR（key_text + 转写，混合契约）✅ 已完成
 3. SE / TSE（audio 打分）
 4. TTS / VC（frontend + transcription + normalization + scoring 复合链）
 5. 最后统一 ASR（把 `KeyTextFiles` 收敛到 `NodePayload`）
@@ -339,3 +339,34 @@ VAD 验证通过后，按「先契约简单、后契约复杂」的顺序推广�
 
 已知边界（沿用评审决定）：ASR 本期不动，仍走 `KeyTextFiles` 契约；二者经
 `run_pipeline` 的鸭子类型并存。
+
+### 9.1 SA-ASR 推广（已完成）
+
+SA-ASR 的 normalization 是 `KeyTextFiles -> KeyTextFiles`（与 ASR 同构），scoring
+是 meeteval 文件（经 conversion 中转），属「key_text + 转写」混合契约。落地内容：
+
+- `normalization/gstar_norm`、`normalization/whisper_norm`、`scoring/meeteval`
+  三内置节点补 `build()` 工厂（`KeyTextFiles` 契约）。
+- `tasks/sa_asr/pipeline.py`：`evaluate_sa_asr_files` 改由 `route["nodes"]` +
+  `registry.build` 动态装配；`_resolve_normalization_node` 对未知 node_id 透传
+  （外部节点免语言约束）；`_normalization_component` 用 profile 映射表生成
+  component（外部节点默认无 profile）。
+- `scripts/sa_asr.py`：`run` 透传 `nodes`。
+
+验收结果：
+
+1. **回归零变化**：内置 2 条 SA-ASR route 的 `pipeline_id` 与迁移前逐字节一致
+   （`sa_asr.zh.cpwer.conversion_sa_asr_cpwer_v1.gstar_norm_v1.meeteval_v1` 与
+   `sa_asr.en.cpwer.conversion_sa_asr_cpwer_v1.whisper_norm_english_v1.meeteval_v1`）。
+2. **外部节点免改源码**：`examples/node_plugin_sa_asr_norm`（外部
+   `normalization/sa_asr_sample_norm` + 注入 route）`pip install` 后经 registry
+   动态装配，`pipeline_id` 正确生成（`sa_asr_sample_norm_v1`，无 profile），
+   trace 首位即外部节点，未改任何框架源码。
+3. **单测**：新增 `tests/test_sa_asr_unified_dispatch.py`（7 例）覆盖 build 工厂、
+   `_resolve_normalization_node`（语言默认/外部透传/内置语言约束）、component
+   profile 映射、executor 动态装配与 node_id 传递。
+
+说明：本机未安装 meeteval（node-local env 未 setup），SA-ASR 的 scoring 端到端
+`metric run` 会因 `import meeteval` 失败——这是 pre-existing 环境限制，与本次迁移
+无关；executor 的 normalization 动态装配与 scoring 调用链已通过 mock meeteval 的
+单测与脚本验证。

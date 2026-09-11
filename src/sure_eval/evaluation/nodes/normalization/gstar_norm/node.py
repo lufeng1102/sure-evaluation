@@ -91,3 +91,12 @@ def cleanup_gstar_norm_outputs(trace: tuple[PipelineNodeResult, ...]) -> None:
             value = result.details.get(key)
             if isinstance(value, str):
                 Path(value).unlink(missing_ok=True)
+
+
+def build(*, language: str = "en", **config):
+    """Build a ``KeyTextFiles``-facing factory around :func:`normalize_gstar_sa_asr_files`."""
+
+    def node(files: KeyTextFiles):
+        return normalize_gstar_sa_asr_files(files, language=language)
+
+    return node

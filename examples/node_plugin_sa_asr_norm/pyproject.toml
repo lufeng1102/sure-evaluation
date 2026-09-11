@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sure-eval-node-sa-asr-norm"
+version = "0.1.0"
+requires-python = ">=3.10"
+
+[project.entry-points."sure_eval.nodes"]
+"normalization/sa_asr_sample_norm" = "sure_eval_node_sa_asr_norm.node"
+
+[project.entry-points."sure_eval.routes"]
+sa_asr = "sure_eval_node_sa_asr_norm.routes"
+
+[tool.setuptools]
+packages = ["sure_eval_node_sa_asr_norm"]

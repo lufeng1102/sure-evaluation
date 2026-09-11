@@ -309,6 +309,7 @@ describe → pipeline.json → run_pipeline（现有流程不变）
 | 测试与示例 | ✅ 已完成 | 33 个单元测试（protocol/registry/commands/route-injection）+ lowercase/exact_match 示例包 |
 | route 注入 | ✅ 已完成 | `load_task_routes` 聚合 `sure_eval.routes` entry point，免改 routes.yaml |
 | VAD 统一 dispatch 试点 | ✅ 已完成 | `NodePayload` 契约 + 内置 `build` 工厂 + `consumes`/`produces` 运行时校验 + VAD executor 动态装配（见 `docs/node_plugin_unified_dispatch.md` §9） |
+| SA-ASR 统一 dispatch | ✅ 已完成 | normalization/scoring 走 `registry.build`（`KeyTextFiles` 契约）+ 外部 node_id 透传（见 `docs/node_plugin_unified_dispatch.md` §9.1） |
 
 ## 12. 后续：全 task 统一解耦
 

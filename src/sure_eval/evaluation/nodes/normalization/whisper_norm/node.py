@@ -125,3 +125,12 @@ def _new_temp_file() -> str:
     path = handle.name
     handle.close()
     return path
+
+
+def build(*, language: str = "en", profile: str = "english", **config):
+    """Build a ``KeyTextFiles``-facing factory around :func:`normalize_whisper_asr_files`."""
+
+    def node(files: KeyTextFiles):
+        return normalize_whisper_asr_files(files, language=language, profile=profile)
+
+    return node

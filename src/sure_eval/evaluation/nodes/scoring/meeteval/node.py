@@ -206,3 +206,19 @@ def _ensure_md_eval_on_path() -> None:
         if path_dir not in current_path.split(os.pathsep):
             os.environ["PATH"] = path_dir + os.pathsep + current_path
         return
+
+
+def build(*, metric: str = "cpwer", collar: float | None = None,
+          companion_metrics: tuple[str, ...] = (), **config):
+    """Build a ``KeyTextFiles``-facing factory around :func:`score_meeteval`."""
+
+    def node(files: KeyTextFiles):
+        return score_meeteval(
+            ref_file=files.ref_file,
+            hyp_file=files.hyp_file,
+            metric=metric,
+            collar=collar,
+            companion_metrics=companion_metrics,
+        )
+
+    return node
