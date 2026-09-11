@@ -5,18 +5,16 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from sure_eval.evaluation.core.types import EvaluationFiles, EvaluationReport, MetricInputContract
-from sure_eval.evaluation.nodes.normalization.vad_timebase import normalize_vad_timebase
-from sure_eval.evaluation.nodes.scoring.vad_auc_roc import score_vad_auc_roc
-from sure_eval.evaluation.nodes.scoring.vad_detection_duration import (
-    score_vad_detection_duration,
+from sure_eval.evaluation.core.pipeline import run_pipeline
+from sure_eval.evaluation.core.types import (
+    EvaluationFiles,
+    EvaluationReport,
+    MetricInputContract,
+    NodePayload,
+    PipelineSpec,
 )
-from sure_eval.evaluation.nodes.validation.vad_contract import (
-    AUC_METRICS,
-    DETECTION_METRICS,
-    REQUIRED_FIELDS_BY_METRIC,
-    validate_vad_contract,
-)
+from sure_eval.evaluation.node_registry import get_registry
+from sure_eval.evaluation.nodes.validation.vad_contract import AUC_METRICS, DETECTION_METRICS
 from sure_eval.evaluation.pipeline_identity import (
     build_atomic_pipeline_id,
     canonical_metric,
@@ -38,21 +36,44 @@ _DETECTION_SCORING_NODE = "scoring/vad_detection_duration"
 _AUC_SCORING_NODE = "scoring/vad_auc_roc"
 
 
+def _default_nodes(metric: str) -> tuple[str, ...]:
+    scoring = _AUC_SCORING_NODE if metric == "auc_roc" else _DETECTION_SCORING_NODE
+    return ("validation/vad_contract", "normalization/vad_timebase", scoring)
+
+
+def _components_from_nodes(node_ids: tuple[str, ...], *, profile: str):
+    components = []
+    for node_id in node_ids:
+        stage = node_id.split("/", 1)[0]
+        components.append(
+            node_component(node_id, profile=profile if stage == "normalization" else None)
+        )
+    return tuple(components)
+
+
 def evaluate_vad_files(
     *,
     reference_jsonl: str | Path,
     sample_output: str | Path,
     metric: str = "f1",
+    nodes: tuple[str, ...] | list[str] | None = None,
     frame_shift_sec: float = 0.01,
     profile: str = "strict",
     collar_sec: float = 0.0,
     boundary_exclusion_sec: float = 0.0,
 ) -> EvaluationReport:
-    """Evaluate VAD predictions against strict seconds-timebase references."""
+    """Evaluate VAD predictions against strict seconds-timebase references.
+
+    The node chain is assembled dynamically from ``nodes`` (builtin nodes are
+    loaded through the node registry), so external validation/normalization/
+    scoring nodes dispatch without editing this module.
+    """
 
     normalized_metric = canonical_metric(metric)
     if normalized_metric not in _SUPPORTED_PRIMARY_METRICS:
         raise ValueError(f"Unsupported VAD metric: {metric}")
+
+    node_ids = tuple(nodes) if nodes else _default_nodes(normalized_metric)
 
     input_files = EvaluationFiles(
         roles={
@@ -61,22 +82,34 @@ def evaluate_vad_files(
         }
     )
     _VAD_JSONL_CONTRACT.validate(input_files)
+    payload = NodePayload(files=input_files)
 
-    validated_bundle, validation_result = validate_vad_contract(
-        reference_jsonl,
-        sample_output,
-        required_prediction_fields=REQUIRED_FIELDS_BY_METRIC[normalized_metric],
+    registry = get_registry()
+    config = {
+        "metric": normalized_metric,
+        "frame_shift_sec": frame_shift_sec,
+        "profile": profile,
+        "collar_sec": collar_sec,
+        "boundary_exclusion_sec": boundary_exclusion_sec,
+    }
+    built_nodes = tuple(registry.build(node_id, **config) for node_id in node_ids)
+
+    components = _components_from_nodes(node_ids, profile=profile)
+    pipeline_id = build_atomic_pipeline_id("vad", "any", normalized_metric, components)
+    spec = PipelineSpec(
+        pipeline_id=pipeline_id,
+        task="VAD",
+        language="n/a",
+        metric=normalized_metric,
+        nodes=built_nodes,
     )
-    normalized_bundle, normalization_result = normalize_vad_timebase(
-        validated_bundle,
-        frame_shift_sec=frame_shift_sec,
-        profile=profile,
-        collar_sec=collar_sec,
-        boundary_exclusion_sec=boundary_exclusion_sec,
-    )
+    final_payload, trace = run_pipeline(spec, payload)
+
+    validation_result, normalization_result, scoring_result = trace[0], trace[1], trace[-1]
+    validated_bundle = final_payload.artifact("validated_bundle")
+    normalized_bundle = final_payload.artifact("normalized_bundle")
 
     if normalized_metric == "auc_roc":
-        scoring_result = score_vad_auc_roc(normalized_bundle)
         primary_scores = {"auc_roc": scoring_result.details["auc_roc"]}
         auxiliary = {
             "num_auc_samples": scoring_result.details["num_auc_samples"],
@@ -85,15 +118,11 @@ def evaluate_vad_files(
         }
         rows = scoring_result.details["per_sample"]
     else:
-        scoring_result = score_vad_detection_duration(normalized_bundle)
         primary_scores = dict(scoring_result.details["primary_scores"])
         auxiliary = dict(scoring_result.details["auxiliary"])
         rows = scoring_result.details["per_sample"]
 
     selected_score = primary_scores.get(normalized_metric)
-    scoring_node_id = _scoring_node_id(normalized_metric)
-    components = _identity_components(scoring_node_id=scoring_node_id, profile=profile)
-    pipeline_id = build_atomic_pipeline_id("vad", "any", normalized_metric, components)
     return EvaluationReport(
         task="VAD",
         language="n/a",
@@ -137,23 +166,8 @@ def pipeline_id_for_metric(metric: str, *, profile: str = "strict") -> str:
         "vad",
         "any",
         normalized_metric,
-        _identity_components(
-            scoring_node_id=_scoring_node_id(normalized_metric),
-            profile=profile,
-        ),
+        _components_from_nodes(_default_nodes(normalized_metric), profile=profile),
     )
-
-
-def _identity_components(*, scoring_node_id: str, profile: str):
-    return (
-        node_component("validation/vad_contract"),
-        node_component("normalization/vad_timebase", profile=profile),
-        node_component(scoring_node_id),
-    )
-
-
-def _scoring_node_id(metric: str) -> str:
-    return _AUC_SCORING_NODE if metric == "auc_roc" else _DETECTION_SCORING_NODE
 
 
 def _report_score(score: Any) -> float | None:

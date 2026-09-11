@@ -1,7 +1,7 @@
 # SURE 节点统一解耦方案（设计 + VAD 试点实现草案）
 
-> 状态：可评审草案。目标是把「ASR 单点解耦」提炼为「全 task 统一解耦」，
-> 并选 VAD（契约最典型的非文本 task）做试点迁移，验证统一方案成立。
+> 状态：VAD 试点已实现并验收通过（§9 验收记录）。方案正文保留原草案，供
+> 后续 task 推广参考。
 
 ## 1. 背景与目标
 
@@ -309,3 +309,33 @@ VAD 验证通过后，按「先契约简单、后契约复杂」的顺序推广�
 
 每一步都遵循「回归零变化 + 外部节点免改源码」两条验收，逐步扩大统一执行模型的
 覆盖范围。
+
+## 9. 验收记录（VAD 试点已落地）
+
+实施内容：
+
+- `core/types.py`：新增 `NodePayload`（`files: EvaluationFiles` + `artifacts`，
+  含 `artifact`/`with_artifact`）；`PipelineSpec.nodes` 注解放宽为通用载荷。
+- `core/node_protocol.py`：`NodeRegistration` 增加 `consumes`/`produces`（从
+  MANIFEST 读取），外部节点可在 MANIFEST 声明 artifacts 契约。
+- `node_registry.py`：内置节点从 `manifest.implementation` 加载 `build` 工厂；
+  `build()` 按 `consumes`/`produces` 包装运行时校验（对非 `NodePayload` 载荷跳过）。
+- VAD 四内置节点补 `build()` 工厂 + manifest 声明 `consumes`/`produces`。
+- `tasks/vad/pipeline.py`：`evaluate_vad_files` 改由 `route["nodes"]` +
+  `registry.build` 动态装配；`pipeline_id` 从节点链生成，与 routes.yaml 逐字节一致。
+- `scripts/vad.py`：`run` 透传 `nodes` 与 config。
+
+验收结果：
+
+1. **回归零变化**：内置 5 条 VAD route 的 `pipeline_id`、`describe`、`run`
+   （score=1.0）与迁移前一致。
+2. **内置动态装配**：`evaluate_vad_files` 不再硬编码三节点。
+3. **外部节点免改源码**：`examples/node_plugin_vad_validation`（外部
+   `validation/sample_vad_contract` + 注入 route）`pip install` 后经 registry
+   动态装配运行，score=1.0，`pipeline_id` 由节点链正确生成，未改任何框架源码。
+4. **单测**：新增 `tests/test_vad_unified_dispatch.py`（6 例）覆盖
+   `NodePayload` 读写、`consumes` 运行时校验、内置 build 工厂、动态装配与
+   `pipeline_id` 稳定。
+
+已知边界（沿用评审决定）：ASR 本期不动，仍走 `KeyTextFiles` 契约；二者经
+`run_pipeline` 的鸭子类型并存。

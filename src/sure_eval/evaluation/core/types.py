@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 
@@ -36,6 +36,25 @@ class EvaluationFiles:
 
     def as_dict(self) -> dict[str, str]:
         return dict(self.roles)
+
+
+@dataclass(frozen=True)
+class NodePayload:
+    """Unified node payload: role-addressed input files plus inter-node artifacts.
+
+    ``files`` carries every input file by role (ref/hyp/src/prediction_audio/...),
+    while ``artifacts`` carries intermediate products passed between nodes
+    (validated bundles, normalized bundles, transcripts, embeddings, ...).
+    """
+
+    files: EvaluationFiles
+    artifacts: dict[str, Any] = field(default_factory=dict)
+
+    def artifact(self, key: str, default: Any = None) -> Any:
+        return self.artifacts.get(key, default)
+
+    def with_artifact(self, key: str, value: Any) -> "NodePayload":
+        return replace(self, artifacts={**self.artifacts, key: value})
 
 
 @dataclass(frozen=True)
@@ -91,7 +110,9 @@ class PipelineSpec:
     task: str
     language: str
     metric: str
-    nodes: tuple[Callable[[KeyTextFiles], tuple[KeyTextFiles, PipelineNodeResult]], ...]
+    # Nodes accept and return the pipeline payload; both KeyTextFiles (ASR) and
+    # NodePayload (role-addressed files + artifacts) are supported.
+    nodes: tuple[Callable[[Any], tuple[Any, PipelineNodeResult]], ...]
 
 
 @dataclass(frozen=True)

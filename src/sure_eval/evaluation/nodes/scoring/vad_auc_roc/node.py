@@ -180,3 +180,14 @@ def _rank_auc(labels: list[int], scores: list[float]) -> float:
     return (
         positive_rank_sum - positive_count * (positive_count + 1) / 2.0
     ) / (positive_count * negative_count)
+
+
+def build(**config):
+    """Build a ``NodePayload``-facing factory around :func:`score_vad_auc_roc`."""
+    from sure_eval.evaluation.core.types import NodePayload
+
+    def node(payload: NodePayload):
+        result = score_vad_auc_roc(payload.artifact("normalized_bundle"))
+        return payload, result
+
+    return node

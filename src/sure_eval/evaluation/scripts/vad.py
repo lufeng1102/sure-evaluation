@@ -46,6 +46,7 @@ def run(*, output_dir: str, **kwargs):
     report = call_route_executor(
         route,
         metric=normalized_metric,
+        nodes=tuple(route.get("computation_nodes") or route["nodes"]),
         frame_shift_sec=float(route.get("frame_shift_sec", 0.01)),
         profile=str(route.get("profile", "strict")),
         collar_sec=float(route.get("collar_sec", 0.0)),

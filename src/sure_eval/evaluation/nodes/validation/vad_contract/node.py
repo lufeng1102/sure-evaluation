@@ -398,3 +398,22 @@ def _summarize_skipped_metrics(rows: list[VADValidatedRow]) -> dict[str, int]:
         for metric in row.skipped_metrics:
             counts[metric] += 1
     return counts
+
+
+def build(*, metric: str | None = None, required_prediction_fields=None, **config):
+    """Build a ``NodePayload``-facing factory around :func:`validate_vad_contract`."""
+    from sure_eval.evaluation.core.types import NodePayload
+
+    if required_prediction_fields is None:
+        required_prediction_fields = REQUIRED_FIELDS_BY_METRIC.get(metric or "", ())
+
+    def node(payload: NodePayload):
+        payload.files.require("reference_jsonl", "sample_output")
+        validated, result = validate_vad_contract(
+            payload.files.roles["reference_jsonl"],
+            payload.files.roles["sample_output"],
+            required_prediction_fields=tuple(required_prediction_fields),
+        )
+        return payload.with_artifact("validated_bundle", validated), result
+
+    return node

@@ -43,6 +43,9 @@ class NodeRegistration:
     source: str = "builtin"
     # Optional selector hints for dynamic dispatch (used in Phase 2).
     selectors: dict[str, Any] = field(default_factory=dict)
+    # Artifact keys this node reads from / writes to NodePayload.artifacts.
+    consumes: tuple[str, ...] = ()
+    produces: tuple[str, ...] = ()
 
     @property
     def name(self) -> str:
@@ -110,6 +113,8 @@ def registration_from_module(
 
     node_env = load_node_env_dict(getattr(module, "NODE_ENV", None), module)
     selectors = dict(getattr(module, "SELECTORS", None) or {})
+    consumes = tuple(manifest.get("consumes") or ())
+    produces = tuple(manifest.get("produces") or ())
 
     return NodeRegistration(
         node_id=str(effective_id),
@@ -121,6 +126,8 @@ def registration_from_module(
         module=module.__name__,
         source=source,
         selectors=selectors,
+        consumes=consumes,
+        produces=produces,
     )
 
 

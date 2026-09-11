@@ -5,6 +5,8 @@ language_sensitive: false
 input_schema: vad_jsonl_files
 output_schema: vad_validated_bundle
 implementation: sure_eval.evaluation.nodes.validation.vad_contract.node
+consumes: []
+produces: [validated_bundle]
 metrics:
   - f1
   - p_fa

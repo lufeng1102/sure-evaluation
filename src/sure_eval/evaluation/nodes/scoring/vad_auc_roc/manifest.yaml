@@ -5,6 +5,8 @@ language_sensitive: false
 input_schema: vad_normalized_bundle
 output_schema: vad_auc_roc_report
 implementation: sure_eval.evaluation.nodes.scoring.vad_auc_roc.node
+consumes: [normalized_bundle]
+produces: []
 metrics:
   - auc_roc
 reported_fields:

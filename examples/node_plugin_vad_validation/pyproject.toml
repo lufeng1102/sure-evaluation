@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sure-eval-node-vad-validation"
+version = "0.1.0"
+requires-python = ">=3.10"
+
+[project.entry-points."sure_eval.nodes"]
+"validation/sample_vad_contract" = "sure_eval_node_vad_validation.node"
+
+[project.entry-points."sure_eval.routes"]
+vad = "sure_eval_node_vad_validation.routes"
+
+[tool.setuptools]
+packages = ["sure_eval_node_vad_validation"]

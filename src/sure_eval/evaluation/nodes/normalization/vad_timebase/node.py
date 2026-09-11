@@ -262,3 +262,21 @@ def _clip(value: float, *, duration: float) -> float:
 
 def _duration(segments: list[Segment]) -> float:
     return sum(max(0.0, segment.end - segment.start) for segment in segments)
+
+
+def build(*, frame_shift_sec: float = 0.01, profile: str = "strict",
+          collar_sec: float = 0.0, boundary_exclusion_sec: float = 0.0, **config):
+    """Build a ``NodePayload``-facing factory around :func:`normalize_vad_timebase`."""
+    from sure_eval.evaluation.core.types import NodePayload
+
+    def node(payload: NodePayload):
+        normalized, result = normalize_vad_timebase(
+            payload.artifact("validated_bundle"),
+            frame_shift_sec=frame_shift_sec,
+            profile=profile,
+            collar_sec=collar_sec,
+            boundary_exclusion_sec=boundary_exclusion_sec,
+        )
+        return payload.with_artifact("normalized_bundle", normalized), result
+
+    return node

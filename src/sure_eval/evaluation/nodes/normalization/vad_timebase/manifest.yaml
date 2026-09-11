@@ -5,6 +5,8 @@ language_sensitive: false
 input_schema: vad_validated_bundle
 output_schema: vad_normalized_bundle
 implementation: sure_eval.evaluation.nodes.normalization.vad_timebase.node
+consumes: [validated_bundle]
+produces: [normalized_bundle]
 metrics:
   - f1
   - p_fa

@@ -40,6 +40,17 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     return data
 
 
+def _check_artifacts(payload: Any, keys: tuple[str, ...], *, node_id: str, phase: str) -> None:
+    """Validate that a ``NodePayload`` carries the artifact keys a node declares."""
+    if not keys or not hasattr(payload, "artifacts"):
+        return
+    missing = [key for key in keys if key not in payload.artifacts]
+    if missing:
+        raise ValueError(
+            f"Node {node_id} {phase} missing artifact(s): {', '.join(missing)}"
+        )
+
+
 class NodeRegistry:
     """Aggregated view over builtin, entry-point, and local-path nodes."""
 
@@ -177,8 +188,21 @@ class NodeRegistry:
     def build(self, node_id: str, **config: Any) -> Any:
         reg = self.resolve(node_id)
         if reg.build is None:
-            raise NotImplementedError(f"Node {node_id} has no 'build' factory (Phase 2)")
-        return reg.build(**config)
+            raise NotImplementedError(f"Node {node_id} has no 'build' factory")
+        node = reg.build(**config)
+        if not reg.consumes and not reg.produces:
+            return node
+        return self._checked_node(node, node_id, reg.consumes, reg.produces)
+
+    @staticmethod
+    def _checked_node(node: Any, node_id: str, consumes: tuple[str, ...], produces: tuple[str, ...]) -> Any:
+        def checked(payload: Any) -> Any:
+            _check_artifacts(payload, consumes, node_id=node_id, phase="consumes")
+            new_payload, result = node(payload)
+            _check_artifacts(new_payload, produces, node_id=node_id, phase="produces")
+            return new_payload, result
+
+        return checked
 
     # ---- helpers ----
 
@@ -195,11 +219,27 @@ class NodeRegistry:
             stage=stage,
             version=version,
             manifest=manifest,
-            build=None,
+            build=self._builtin_build(node_id, manifest),
             node_env=node_env,
             module="",
             source="builtin",
+            consumes=tuple(manifest.get("consumes") or ()),
+            produces=tuple(manifest.get("produces") or ()),
         )
+
+    def _builtin_build(self, node_id: str, manifest: dict[str, Any]) -> Any:
+        """Load a builtin node's ``build`` factory from its node module, if any."""
+        impl = manifest.get("implementation")
+        if impl:
+            module_name = impl
+        else:
+            stage, name = node_id.split("/", 1)
+            module_name = f"sure_eval.evaluation.nodes.{stage}.{name}.node"
+        try:
+            module = import_module(module_name)
+        except ImportError:
+            return None
+        return getattr(module, "build", None)
 
     @staticmethod
     def _module_registration(

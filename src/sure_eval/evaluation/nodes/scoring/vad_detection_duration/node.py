@@ -168,3 +168,14 @@ def _f1(precision: float | None, recall: float | None) -> float | None:
     if precision_value + recall_value <= 0.0:
         return 0.0
     return 2.0 * precision_value * recall_value / (precision_value + recall_value)
+
+
+def build(**config):
+    """Build a ``NodePayload``-facing factory around :func:`score_vad_detection_duration`."""
+    from sure_eval.evaluation.core.types import NodePayload
+
+    def node(payload: NodePayload):
+        result = score_vad_detection_duration(payload.artifact("normalized_bundle"))
+        return payload, result
+
+    return node

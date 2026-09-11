@@ -5,6 +5,8 @@ language_sensitive: false
 input_schema: vad_normalized_bundle
 output_schema: vad_detection_duration_report
 implementation: sure_eval.evaluation.nodes.scoring.vad_detection_duration.node
+consumes: [normalized_bundle]
+produces: []
 metrics:
   - f1
   - p_fa
