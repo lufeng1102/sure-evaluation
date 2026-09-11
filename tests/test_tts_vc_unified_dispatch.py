@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import types
 
-import pytest
-
 from sure_eval.evaluation.core.types import PipelineNodeResult
 from sure_eval.evaluation import node_registry as nr
 from sure_eval.evaluation.node_registry import get_registry
@@ -91,6 +89,19 @@ def test_transcribe_audio_dispatches_external(monkeypatch) -> None:
     assert transcript == "fake-en"
     assert [node.node_id for node in trace] == ["transcription/fake_asr"]
     assert trace[0].details["external"] is True
+
+
+def test_tts_runtime_defers_external_transcription_to_registry() -> None:
+    from sure_eval.evaluation.audio_runtime import build_tts_runtime
+
+    runtime = build_tts_runtime(
+        metrics=("tts_wer",),
+        language="en",
+        device="cpu",
+        transcription_node_id="transcription/sample_tts_asr",
+    )
+
+    assert runtime["transcribers"] == {}
 
 
 def test_transcription_components_builtin_and_external(monkeypatch) -> None:

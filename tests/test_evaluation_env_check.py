@@ -3,9 +3,20 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from sure_eval.cli import app
+
+
+def _skip_if_node_unprepared(node_id: str) -> None:
+    """Keep checkpoint-backed assertions portable outside the heavy-node runner."""
+
+    from sure_eval.evaluation.env_check import NodeEnvChecker
+
+    result = NodeEnvChecker().check_node(node_id)
+    if result.status != "ok":
+        pytest.skip(f"{node_id} is not prepared: {result.message}")
 
 
 def test_node_env_checker_treats_in_process_node_as_ok_without_venv() -> None:
@@ -48,6 +59,7 @@ def test_node_env_checker_accepts_default_bleurt_checkpoint_without_env_var(monk
     from sure_eval.evaluation.env_check import NodeEnvChecker
 
     monkeypatch.delenv("BLEURT_20_CHECKPOINT", raising=False)
+    _skip_if_node_unprepared("scoring/bleurt_20")
 
     checker = NodeEnvChecker()
     result = checker.check_node("scoring/bleurt_20")
@@ -63,6 +75,7 @@ def test_node_env_checker_accepts_default_xcomet_checkpoint_without_env_var(monk
 
     monkeypatch.delenv("XCOMET_XL_CHECKPOINT_PATH", raising=False)
     monkeypatch.delenv("XCOMET_XL_CHECKPOINT_DIR", raising=False)
+    _skip_if_node_unprepared("scoring/xcomet_xl")
 
     checker = NodeEnvChecker()
     result = checker.check_node("scoring/xcomet_xl")
@@ -135,6 +148,10 @@ def test_transcription_node_local_envs_are_checked() -> None:
 
     paraformer = checker.check_node("transcription/paraformer_zh")
     whisper = checker.check_node("transcription/whisper_large_v3")
+
+    for result in (paraformer, whisper):
+        if result.status != "ok":
+            pytest.skip(f"{result.node_id} is not prepared: {result.message}")
 
     assert paraformer.runtime == "node_local_project"
     assert whisper.runtime == "node_local_project"
@@ -690,6 +707,8 @@ def test_metric_run_validate_env_passes_for_provider_injected_audio_node(
     monkeypatch, tmp_path: Path
 ) -> None:
     import sure_eval.evaluation.cli as metric_cli
+
+    _skip_if_node_unprepared("transcription/paraformer_zh")
 
     runner = CliRunner()
     pipeline_path = tmp_path / "pipeline.json"

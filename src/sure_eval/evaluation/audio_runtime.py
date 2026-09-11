@@ -136,8 +136,15 @@ def _build_audio_runtime(
                 node_dir=NODES_ROOT / "transcription" / "qwen3_asr_1_7b",
                 device=device,
             )
-        elif transcription_node_id not in {None, "transcription/paraformer_zh", "transcription/whisper_large_v3"}:
-            raise ValueError(f"Unsupported semantic transcription node: {transcription_node_id}")
+        elif transcription_node_id not in {
+            None,
+            "transcription/paraformer_zh",
+            "transcription/whisper_large_v3",
+        }:
+            # External transcription nodes are built by ``transcribe_audio`` via
+            # the registry.  Leave the runner empty so that path can dispatch
+            # the selected plugin instead of treating it as a host provider.
+            pass
         elif language.lower().startswith(("zh", "cmn", "yue")):
             from sure_eval.evaluation.nodes.transcription.common.providers import (
                 NodeLocalTranscriber,
