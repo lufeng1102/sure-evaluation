@@ -203,5 +203,20 @@ def _emit_payload(
         print(transcript)
 
 
+
+
+
+def build(*, runner=None, **config):
+    """Build a transcription node factory around :func:`transcribe_qwen3_asr_1_7b`."""
+
+    def node(audio_path: str, *, language: str = "en", role: str = "prediction_audio"):
+        transcript, transcription_result = transcribe_qwen3_asr_1_7b(
+            audio_path, language=language, runner=runner, role=role
+        )
+        return transcript, (transcription_result,)
+
+    return node
+
+
 if __name__ == "__main__":
     raise SystemExit(main())

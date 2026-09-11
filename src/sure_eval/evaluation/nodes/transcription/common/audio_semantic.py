@@ -8,15 +8,6 @@ from pathlib import Path
 from typing import Any, Mapping, Protocol
 
 from sure_eval.evaluation.core.types import EvaluationReport, PipelineNodeResult
-from sure_eval.evaluation.nodes.frontend.funasr_loader_16k_mono import (
-    describe_funasr_loader_16k_mono,
-)
-from sure_eval.evaluation.nodes.transcription.cohere_transcribe_arabic_07_2026 import (
-    transcribe_cohere_transcribe_arabic_07_2026,
-)
-from sure_eval.evaluation.nodes.transcription.paraformer_zh import transcribe_paraformer_zh
-from sure_eval.evaluation.nodes.transcription.qwen3_asr_1_7b import transcribe_qwen3_asr_1_7b
-from sure_eval.evaluation.nodes.transcription.whisper_large_v3 import transcribe_whisper_large_v3
 from sure_eval.evaluation.pipeline_identity import PipelineComponent, node_component
 from sure_eval.evaluation.tasks.asr.pipeline import evaluate_asr_files
 
@@ -137,44 +128,10 @@ def transcribe_audio(
     transcription_node_id: str | None = None,
 ) -> tuple[str, tuple[PipelineNodeResult, ...]]:
     selected_node = transcription_node_id or _default_transcription_node_id(language)
-    if selected_node == "transcription/cohere_transcribe_arabic_07_2026":
-        transcript, transcription_result = transcribe_cohere_transcribe_arabic_07_2026(
-            audio_path,
-            language=language,
-            runner=runner,
-            role=role,
-        )
-        return transcript, (transcription_result,)
-    if selected_node == "transcription/qwen3_asr_1_7b":
-        transcript, transcription_result = transcribe_qwen3_asr_1_7b(
-            audio_path,
-            language=language,
-            runner=runner,
-            role=role,
-        )
-        return transcript, (transcription_result,)
-    if selected_node == "transcription/paraformer_zh":
-        frontend_result = describe_funasr_loader_16k_mono(
-            audio_path,
-            language=language,
-            role=role,
-        )
-        transcript, transcription_result = transcribe_paraformer_zh(
-            audio_path,
-            language=language,
-            runner=runner,
-            role=role,
-        )
-        return transcript, (frontend_result, transcription_result)
-    if selected_node != "transcription/whisper_large_v3":
-        raise ValueError(f"Unsupported semantic transcription node: {selected_node}")
-    transcript, transcription_result = transcribe_whisper_large_v3(
-        audio_path,
-        language=language,
-        runner=runner,
-        role=role,
-    )
-    return transcript, (transcription_result,)
+    from sure_eval.evaluation.node_registry import get_registry
+
+    node = get_registry().build(selected_node, runner=runner)
+    return node(audio_path, language=language, role=role)
 
 
 def _transcription_components(
@@ -182,18 +139,18 @@ def _transcription_components(
     transcription_node_id: str | None,
 ) -> tuple[PipelineComponent, ...]:
     selected_node = transcription_node_id or _default_transcription_node_id(language)
-    if selected_node == "transcription/cohere_transcribe_arabic_07_2026":
-        return (node_component("transcription/cohere_transcribe_arabic_07_2026"),)
-    if selected_node == "transcription/qwen3_asr_1_7b":
-        return (node_component("transcription/qwen3_asr_1_7b"),)
     if selected_node == "transcription/paraformer_zh":
         return (
             node_component("frontend/funasr_loader_16k_mono"),
             node_component("transcription/paraformer_zh"),
         )
-    if selected_node == "transcription/whisper_large_v3":
-        return (node_component("transcription/whisper_large_v3"),)
-    raise ValueError(f"Unsupported semantic transcription node: {selected_node}")
+    from sure_eval.evaluation.node_registry import get_registry
+
+    try:
+        get_registry().resolve(selected_node)
+    except KeyError:
+        raise ValueError(f"Unsupported semantic transcription node: {selected_node}") from None
+    return (node_component(selected_node),)
 
 
 def _default_transcription_node_id(language: str) -> str:

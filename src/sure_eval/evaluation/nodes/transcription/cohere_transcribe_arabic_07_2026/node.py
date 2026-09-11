@@ -324,5 +324,20 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+
+
+
+def build(*, runner=None, **config):
+    """Build a transcription node factory around :func:`transcribe_cohere_transcribe_arabic_07_2026`."""
+
+    def node(audio_path: str, *, language: str = "ar", role: str = "prediction_audio"):
+        transcript, transcription_result = transcribe_cohere_transcribe_arabic_07_2026(
+            audio_path, language=language, runner=runner, role=role
+        )
+        return transcript, (transcription_result,)
+
+    return node
+
+
 if __name__ == "__main__":
     raise SystemExit(main())

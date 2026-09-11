@@ -304,7 +304,7 @@ VAD 验证通过后，按「先契约简单、后契约复杂」的顺序推广�
 1. VAD（jsonl segments，本草案试点）✅ 已完成
 2. SA-ASR（key_text + 转写，混合契约）✅ 已完成
 3. SE / TSE（audio 打分）✅ 已完成
-4. TTS / VC（frontend + transcription + normalization + scoring 复合链）
+4. TTS / VC（frontend + transcription + normalization + scoring 复合链）✅ 已完成
 5. 最后统一 ASR（把 `KeyTextFiles` 收敛到 `NodePayload`）
 
 每一步都遵循「回归零变化 + 外部节点免改源码」两条验收，逐步扩大统一执行模型的
@@ -409,3 +409,39 @@ SE / TSE 的 scoring 节点是 provider-backed 的「audio 打分」契约：
 仍走 `audio_semantic` 独立 dispatch，不在本次 scoring 解耦范围内；TTS/VC 推广时
 一并处理。本机未装 `soundfile`，SE/TSE 的 `metric run`（真实音频打分）无法端到端
 跑通——pre-existing 环境限制；dispatch 链已通过 provider 契约单测与脚本验证。
+
+### 9.3 TTS / VC 推广（已完成）
+
+TTS / VC 的语义链（transcription → normalization → scoring，zh 链路还含
+frontend）此前经 `audio_semantic` 硬编码 dispatch，speaker/MOS 经
+`_audio_quality_dispatch`。本次把两处都收敛到 registry fallback：
+
+- 4 个内置 transcription 节点（`paraformer_zh`/`whisper_large_v3`/
+  `qwen3_asr_1_7b`/`cohere_transcribe_arabic_07_2026`）补 `build()` 工厂
+  （`node(audio_path, *, language, role) -> (transcript, trace)`；paraformer
+  自带 FunASR loader frontend）。
+- `audio_semantic.transcribe_audio` 与 `_transcription_components` 的 if-elif
+  改为 `registry.build(selected_node)`，外部 transcription 节点经
+  `route["nodes"]` 的 `transcription/` node_id 直接透传（scripts 已有的
+  `_semantic_transcription_node` 自动推导）。
+- TTS / VC executor：`_scoring_family`（与 SE/TSE 同构）判定 speaker/MOS，
+  `_is_speaker_metric`、MOS dispatch 集合、`unsupported` 检查加入 registry
+  fallback。
+
+验收结果：
+
+1. **回归零变化**：TTS zh/en 各 8 条、ar 7 条，VC zh/en 各 8 条、ar 6 条
+   route 的 `pipeline_id` 与迁移前逐字节一致；核心 + TTS/VC + SE/TSE 回归
+   73 passed。
+2. **外部节点免改源码**：`examples/node_plugin_tts_transcription`（外部
+   `transcription/sample_tts_asr` + 注入 TTS route）`pip install` 后经 registry
+   动态装配，`transcribe_audio` 正确 dispatch 到外部节点（transcript + trace），
+   未改任何框架源码。
+3. **单测**：新增 `tests/test_tts_vc_unified_dispatch.py`（5 例）覆盖 transcription
+   build 工厂、`transcribe_audio` 内置/外部 dispatch、`_transcription_components`
+   内置/外部、TTS/VC `_scoring_family` 外部回退。
+
+边界：TTS/VC 语义链的 scoring（wenet_wer/wenet_cer）与 normalization 仍经
+`evaluate_asr_files`（ASR executor，本身已 registry 化）；本机未装 sctk / ASR 模型，
+完整语义链 `metric run` 无法端到端跑通——pre-existing 环境限制。至此仅剩 ASR
+自身载荷收敛（§8 第 5 步）。

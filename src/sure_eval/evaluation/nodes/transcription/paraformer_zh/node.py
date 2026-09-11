@@ -136,5 +136,27 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+
+
+
+def build(*, runner=None, **config):
+    """Build a transcription node factory (with FunASR loader frontend)."""
+
+    def node(audio_path: str, *, language: str = "zh", role: str = "prediction_audio"):
+        from sure_eval.evaluation.nodes.frontend.funasr_loader_16k_mono import (
+            describe_funasr_loader_16k_mono,
+        )
+
+        frontend_result = describe_funasr_loader_16k_mono(
+            audio_path, language=language, role=role
+        )
+        transcript, transcription_result = transcribe_paraformer_zh(
+            audio_path, language=language, runner=runner, role=role
+        )
+        return transcript, (frontend_result, transcription_result)
+
+    return node
+
+
 if __name__ == "__main__":
     raise SystemExit(main())

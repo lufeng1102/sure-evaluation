@@ -311,6 +311,7 @@ describe → pipeline.json → run_pipeline（现有流程不变）
 | VAD 统一 dispatch 试点 | ✅ 已完成 | `NodePayload` 契约 + 内置 `build` 工厂 + `consumes`/`produces` 运行时校验 + VAD executor 动态装配（见 `docs/node_plugin_unified_dispatch.md` §9） |
 | SA-ASR 统一 dispatch | ✅ 已完成 | normalization/scoring 走 `registry.build`（`KeyTextFiles` 契约）+ 外部 node_id 透传（见 `docs/node_plugin_unified_dispatch.md` §9.1） |
 | SE/TSE 统一 dispatch | ✅ 已完成 | provider-backed audio 打分契约 + `_audio_quality_dispatch`/executor registry fallback（见 `docs/node_plugin_unified_dispatch.md` §9.2） |
+| TTS/VC 统一 dispatch | ✅ 已完成 | transcription 复合链（`audio_semantic` 收敛）+ speaker/MOS registry fallback（见 `docs/node_plugin_unified_dispatch.md` §9.3） |
 
 ## 12. 后续：全 task 统一解耦
 
