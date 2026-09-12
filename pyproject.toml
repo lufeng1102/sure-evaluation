@@ -48,7 +48,7 @@ se = [
 ]
 download = [
     "huggingface-hub>=0.20.0",
-    "modelscope>=1.10.0",
+    "modelscope>=1.37.1",
 ]
 datasets = [
     "datasets>=2.14.0",

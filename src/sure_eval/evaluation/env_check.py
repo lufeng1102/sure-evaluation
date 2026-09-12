@@ -6,6 +6,7 @@ import importlib.util
 import os
 import shlex
 import shutil
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,6 +15,7 @@ from typing import Any
 import yaml
 
 from sure_eval.evaluation.cache import CACHE_ENV_VAR, get_cache_root
+from sure_eval.evaluation.checksums import verify_file_sha256
 from sure_eval.evaluation.scripts.contracts import NODES_ROOT, load_node_manifest
 
 NODE_LOCAL_PROJECTS = {
@@ -173,7 +175,9 @@ class NodeEnvChecker:
         }
         if fallback_python != venv_python:
             details["fallback_venv_python"] = str(fallback_python)
-        checkpoint_path, checkpoint_env = self._checkpoint_path(node_id, node_path, node_env)
+        checkpoint_path, checkpoint_env, checkpoint_sha256 = self._checkpoint_spec(
+            node_id, node_path, node_env
+        )
         if checkpoint_path is not None:
             details["checkpoint_path"] = str(checkpoint_path)
         if checkpoint_path is not None and not checkpoint_path.exists():
@@ -184,9 +188,28 @@ class NodeEnvChecker:
                 required=True,
                 status="failed",
                 message=f"checkpoint is missing: {checkpoint_path}",
-                fix=f"export {checkpoint_env}=/path/to/checkpoint",
+                fix=(
+                    f"sure-eval env download --node {node_id}; or export "
+                    f"{checkpoint_env}=/path/to/checkpoint"
+                ),
                 details=details,
             )
+        if checkpoint_path is not None and checkpoint_sha256:
+            details["checkpoint_sha256"] = checkpoint_sha256
+            try:
+                verify_file_sha256(checkpoint_path, checkpoint_sha256)
+            except RuntimeError as exc:
+                details["checksum_error"] = str(exc)
+                return EnvCheckResult(
+                    name=node_id,
+                    node_id=node_id,
+                    runtime=runtime,
+                    required=True,
+                    status="failed",
+                    message=f"checkpoint checksum failed: {exc}",
+                    fix=f"sure-eval env download --node {node_id}",
+                    details=details,
+                )
         venv_exists, venv_error = _path_exists(venv_python)
         fallback_exists, fallback_error = _path_exists(fallback_python)
         if not venv_exists and not fallback_exists:
@@ -205,8 +228,8 @@ class NodeEnvChecker:
                 details=details,
             )
         missing_verify_files = []
-        for file_name in (node_env.get("verify") or {}).get("files") or ():
-            file_path = node_path / str(file_name)
+        for file_spec in (node_env.get("verify") or {}).get("files") or ():
+            file_path = _resolve_verify_file(node_path, file_spec)
             if not file_path.exists():
                 missing_verify_files.append(str(file_path))
         if missing_verify_files:
@@ -221,6 +244,26 @@ class NodeEnvChecker:
                 fix=f"sure-eval env setup --node {node_id}",
                 details=details,
             )
+        verify = node_env.get("verify") if isinstance(node_env.get("verify"), dict) else {}
+        imports = [str(name) for name in verify.get("imports") or ()]
+        if verify.get("import_check") and imports:
+            import_result = _check_node_local_imports(
+                venv_python if venv_exists else fallback_python,
+                imports,
+            )
+            details["imports"] = imports
+            if import_result:
+                details["import_error"] = import_result
+                return EnvCheckResult(
+                    name=node_id,
+                    node_id=node_id,
+                    runtime=runtime,
+                    required=True,
+                    status="failed",
+                    message=f"node-local import check failed: {import_result}",
+                    fix=f"sure-eval env setup --node {node_id}",
+                    details=details,
+                )
         return EnvCheckResult(
             name=node_id,
             node_id=node_id,
@@ -262,9 +305,23 @@ class NodeEnvChecker:
         node_path: Path,
         node_env: dict[str, Any] | None,
     ) -> tuple[Path | None, str]:
+        checkpoint_path, checkpoint_env, _ = self._checkpoint_spec(
+            node_id,
+            node_path,
+            node_env,
+        )
+        return checkpoint_path, checkpoint_env
+
+    def _checkpoint_spec(
+        self,
+        node_id: str,
+        node_path: Path,
+        node_env: dict[str, Any] | None,
+    ) -> tuple[Path | None, str, str]:
         if node_env:
             first_declared_path: Path | None = None
             first_declared_env = ""
+            first_declared_sha256 = ""
             for model in node_env.get("models") or ():
                 if not isinstance(model, dict):
                     continue
@@ -272,18 +329,26 @@ class NodeEnvChecker:
                 target = str(model.get("target") or "")
                 if not target:
                     continue
-                model_path = Path(os.environ.get(env_name, node_path / target)).expanduser()
+                env_value = os.environ.get(env_name) if env_name else None
+                model_path = Path(env_value or node_path / target).expanduser()
+                if env_value and model_path.is_dir():
+                    model_path = model_path / Path(target).name
                 if first_declared_path is None:
                     first_declared_path = model_path
                     first_declared_env = env_name
+                    first_declared_sha256 = str(model.get("sha256") or "")
                 if not model_path.exists():
-                    return model_path, env_name
+                    return model_path, env_name, str(model.get("sha256") or "")
             if first_declared_path is not None:
-                return first_declared_path, first_declared_env
+                return first_declared_path, first_declared_env, first_declared_sha256
         checkpoint_env, default_checkpoint = DEFAULT_CHECKPOINTS_BY_NODE.get(node_id, ("", ""))
         if default_checkpoint:
-            return Path(os.environ.get(checkpoint_env, node_path / default_checkpoint)).expanduser(), checkpoint_env
-        return None, ""
+            return (
+                Path(os.environ.get(checkpoint_env, node_path / default_checkpoint)).expanduser(),
+                checkpoint_env,
+                "",
+            )
+        return None, "", ""
 
     def _check_binary_node(self, node_id: str, node_path: Path, node_env: dict[str, Any]) -> EnvCheckResult:
         details = {
@@ -425,6 +490,48 @@ def package_install_specs(node_env: dict[str, Any]) -> list[str]:
             continue
         specs.append(f"{name}{version}" if version else name)
     return specs
+
+
+def _resolve_verify_file(node_path: Path, file_spec: object) -> Path:
+    """Resolve a verify path, optionally relative to a model override."""
+
+    if not isinstance(file_spec, dict):
+        return node_path / str(file_spec)
+    relative_path = str(file_spec.get("path") or "")
+    if not relative_path:
+        raise ValueError("verify file mapping requires a path")
+    env_name = str(file_spec.get("relative_to_env") or "")
+    env_value = os.environ.get(env_name) if env_name else None
+    if env_value:
+        base = Path(env_value).expanduser()
+        if base.is_file():
+            base = base.parent
+    else:
+        default_base = str(file_spec.get("default_base") or "")
+        base = node_path / default_base
+    return base / relative_path
+
+
+def _check_node_local_imports(python_path: Path, imports: list[str]) -> str:
+    script = "import importlib\nfor name in " + repr(imports) + ":\n    importlib.import_module(name)\n"
+    try:
+        env = os.environ.copy()
+        env.pop("PYTHONPATH", None)
+        env["PYTHONNOUSERSITE"] = "1"
+        completed = subprocess.run(
+            [str(python_path), "-c", script],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+            timeout=60,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return str(exc)
+    if completed.returncode == 0:
+        return ""
+    return (completed.stderr or completed.stdout).strip().splitlines()[-1]
 
 
 def check_pipeline_environment(pipeline: dict[str, Any]) -> list[EnvCheckResult]:
