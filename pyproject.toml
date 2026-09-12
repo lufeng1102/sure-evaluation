@@ -107,6 +107,12 @@ sure_eval = [
     "evaluation/nodes/**/*.bin",
 ]
 
+[tool.pytest.ini_options]
+markers = [
+    "integration: tests that mutate the environment (pip install) and run subprocess CLI",
+]
+addopts = ["-m", "not integration"]
+
 [tool.black]
 line-length = 100
 target-version = ["py310"]
