@@ -8,6 +8,7 @@ entry points or local paths.  Callable construction (``build``) lands in Phase 2
 from __future__ import annotations
 
 import importlib.util
+import warnings
 from functools import lru_cache
 from importlib import import_module
 from importlib.metadata import entry_points
@@ -61,6 +62,66 @@ class NodeRegistry:
         # ``find_by_selector``/``find_node_by_name`` call resolves against them
         # without executors passing the paths explicitly.
         self.local_paths: tuple[str | Path, ...] = ()
+        self.project_local_paths: tuple[str | Path, ...] = ()
+        self._project_dir: Path | None = None
+        self._conflict_paths: tuple[str, ...] | None = None
+
+    def ensure_project_plugins(self, project_dir: str | Path | None = None) -> None:
+        """Load project-local plugin paths once for the selected project directory."""
+
+        from sure_eval.evaluation.plugin_management import configure_registry_paths, project_root
+
+        root = project_root(project_dir) if project_dir is not None else (self._project_dir or project_root())
+        if self._project_dir == root:
+            return
+        self.project_local_paths = configure_registry_paths(root)
+        self._project_dir = root
+        self._conflict_paths = None
+
+    def invalidate_project_plugins(self) -> None:
+        """Drop cached project-plugin paths so the next access reloads config.
+
+        ``plugin add``/``remove`` mutate the on-disk declaration inside the same
+        process (notably under ``CliRunner``), so a subsequent resolve/route load
+        must re-read the project instead of reusing stale paths.
+        """
+
+        self._project_dir = None
+        self.project_local_paths = ()
+        self._conflict_paths = None
+
+    def _effective_local_paths(self) -> tuple[str | Path, ...]:
+        self.ensure_project_plugins(self._project_dir)
+        return self.project_local_paths + self.local_paths
+
+    def _check_external_conflicts(self) -> None:
+        """Reject duplicate external node identities before resolution."""
+
+        path_signature = tuple(str(path) for path in self.project_local_paths + self.local_paths)
+        if self._conflict_paths == path_signature:
+            return
+        builtin_ids = set(self.discover_builtin_node_ids())
+        sources: dict[str, list[str]] = {}
+        for node_id, _ in self.iter_entry_point_specs():
+            sources.setdefault(node_id, []).append("entry_point")
+        for path in self._effective_local_paths():
+            reg = self._local_registration(path)
+            if reg is not None:
+                sources.setdefault(reg.node_id, []).append(str(path))
+        for node_id, source_list in sources.items():
+            if len(source_list) < 2:
+                continue
+            if node_id in builtin_ids:
+                warnings.warn(
+                    f"External node {node_id!r} is shadowed by builtin; using builtin implementation",
+                    RuntimeWarning,
+                    stacklevel=3,
+                )
+                continue
+            raise ValueError(
+                f"Duplicate external node_id {node_id!r} from: {', '.join(source_list)}"
+            )
+        self._conflict_paths = path_signature
 
     # ---- builtin discovery ----
 
@@ -96,6 +157,8 @@ class NodeRegistry:
     # ---- metadata ----
 
     def manifest(self, node_id: str) -> dict[str, Any]:
+        self.ensure_project_plugins()
+        self._check_external_conflicts()
         path = self._builtin_manifest_path(node_id)
         if path is not None:
             return _load_yaml(path)
@@ -108,6 +171,8 @@ class NodeRegistry:
         raise KeyError(f"Unknown node: {node_id!r}")
 
     def manifest_path(self, node_id: str) -> Path:
+        self.ensure_project_plugins()
+        self._check_external_conflicts()
         path = self._builtin_manifest_path(node_id)
         if path is not None:
             return path
@@ -115,7 +180,7 @@ class NodeRegistry:
             if name == node_id:
                 module = _import_cached(value)
                 return Path(module.__file__).resolve()
-        for local_path in self.local_paths:
+        for local_path in self._effective_local_paths():
             reg = self._local_registration(local_path)
             if reg is not None and reg.node_id == node_id:
                 p = Path(local_path)
@@ -123,6 +188,8 @@ class NodeRegistry:
         raise KeyError(f"Unknown node: {node_id!r}")
 
     def node_env(self, node_id: str) -> dict[str, Any] | None:
+        self.ensure_project_plugins()
+        self._check_external_conflicts()
         path = self._builtin_manifest_path(node_id)
         if path is not None:
             env_path = path.parent / "node_env.yaml"
@@ -136,6 +203,8 @@ class NodeRegistry:
         return None
 
     def iter_node_ids(self) -> tuple[str, ...]:
+        self.ensure_project_plugins()
+        self._check_external_conflicts()
         ids = set(self.discover_builtin_node_ids())
         ids.update(name for name, _ in self.iter_entry_point_specs())
         ids.update(reg.node_id for reg in self._local_registrations())
@@ -144,6 +213,8 @@ class NodeRegistry:
     def iter_env_node_ids(self) -> tuple[str, ...]:
         """Node ids that declare a ``node_env`` (need environment visibility)."""
 
+        self.ensure_project_plugins()
+        self._check_external_conflicts()
         ids: set[str] = set()
         for env_path in sorted(self.nodes_root.glob("*/*/node_env.yaml")):
             stage = env_path.parent.parent.name
@@ -167,6 +238,8 @@ class NodeRegistry:
         nodes are considered after entry-point nodes.
         """
 
+        self.ensure_project_plugins()
+        self._check_external_conflicts()
         for name, module_path in self.iter_entry_point_specs():
             reg = self._module_registration(module_path, name, source="entry_point")
             if reg.stage == stage and reg.selectors.get(key) == value:
@@ -179,6 +252,8 @@ class NodeRegistry:
     def find_node_by_name(self, stage: str, name: str) -> str | None:
         """Resolve a node id from its stage and name (builtin, entry point, or local path)."""
 
+        self.ensure_project_plugins()
+        self._check_external_conflicts()
         node_id = f"{stage}/{name}"
         if self._builtin_manifest_path(node_id) is not None:
             return node_id
@@ -198,6 +273,8 @@ class NodeRegistry:
         *,
         local_paths: list[str | Path] | None = None,
     ) -> NodeRegistration:
+        self.ensure_project_plugins()
+        self._check_external_conflicts()
         # ① builtin
         if self._builtin_manifest_path(node_ref) is not None:
             return self._builtin_registration(node_ref)
@@ -206,7 +283,7 @@ class NodeRegistry:
             if name == node_ref:
                 return self._module_registration(value, node_ref, source="entry_point")
         # ③ local paths (explicit argument wins over the session-scoped set)
-        paths = local_paths if local_paths is not None else self.local_paths
+        paths = local_paths if local_paths is not None else self._effective_local_paths()
         for path in paths:
             reg = self._local_registration(path)
             if reg is not None and reg.node_id == node_ref:
@@ -289,7 +366,7 @@ class NodeRegistry:
     def _local_registrations(self) -> list[NodeRegistration]:
         """Registration for every session-scoped local node path (skipping invalid)."""
         regs: list[NodeRegistration] = []
-        for path in self.local_paths:
+        for path in self._effective_local_paths():
             reg = self._local_registration(path)
             if reg is not None:
                 regs.append(reg)
@@ -303,8 +380,9 @@ class NodeRegistry:
         entry point so a zero-install directory can register both nodes and
         routes.
         """
+        self.ensure_project_plugins()
         modules: list[ModuleType] = []
-        for path in self.local_paths:
+        for path in self._effective_local_paths():
             module = _import_route_module(path)
             if module is not None:
                 modules.append(module)

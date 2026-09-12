@@ -8,7 +8,7 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 
 import typer
 from rich.console import Console
@@ -35,11 +35,20 @@ from sure_eval.evaluation.env_check import (
 )
 from sure_eval.evaluation.node_commands import create_node, list_nodes
 from sure_eval.evaluation.node_registry import get_registry
+from sure_eval.evaluation.plugin_management import (
+    PluginError,
+    add_plugin,
+    plugin_records,
+    remove_plugin,
+    project_root,
+    sync_plugins,
+)
 
 metric_app = typer.Typer(help="Discover, describe, and run versioned evaluation pipelines")
 env_app = typer.Typer(help="Inspect and prepare optional node-local environments")
 agent_app = typer.Typer(help="Plan route selection and environment readiness for agents")
 node_app = typer.Typer(help="List registered nodes and scaffold external (plugin) nodes")
+plugin_app = typer.Typer(help="Manage project-local SURE-EVAL plugins")
 app = typer.Typer(help="SURE-EVAL versioned system evaluation")
 console = Console()
 
@@ -342,12 +351,22 @@ def agent_plan(
 def main(
     ctx: typer.Context,
     version: bool = typer.Option(False, "--version", help="Print package version and exit"),
+    project_dir: Optional[Path] = typer.Option(
+        None,
+        "--project-dir",
+        help="Project root containing .sure-eval/plugins.yaml",
+    ),
 ) -> None:
     """SURE-EVAL command line interface."""
 
     if version:
         console.print(sure_eval.__version__)
         raise typer.Exit()
+    try:
+        get_registry().ensure_project_plugins(project_dir)
+    except Exception as exc:
+        raise typer.BadParameter(str(exc), param_hint="--project-dir") from exc
+    ctx.obj = project_dir
     if ctx.invoked_subcommand is None:
         console.print(ctx.get_help())
         raise typer.Exit()
@@ -1025,7 +1044,131 @@ def node_create(
     console.print(f"Install: [bold]{payload['install_hint']}[/bold]")
 
 
+def _plugin_json_or_print(payload: Any, json_output: bool) -> None:
+    if json_output:
+        sys.stdout.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+    else:
+        console.print(payload)
+
+
+@plugin_app.command("add")
+def plugin_add(
+    ctx: typer.Context,
+    path: str = typer.Argument(..., help="Local plugin directory"),
+    name: Optional[str] = typer.Option(None, "--name", help="Override the directory-derived name"),
+    replace: bool = typer.Option(False, "--replace", help="Replace an existing plugin with this name"),
+    json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON"),
+) -> None:
+    try:
+        inspection = add_plugin(path, project_dir=ctx.obj, name=name, replace=replace)
+        get_registry().invalidate_project_plugins()
+        payload = {
+            "name": inspection.name,
+            "source": inspection.source,
+            "path": str(inspection.path),
+            "node_ids": list(inspection.node_ids),
+            "pipeline_ids": list(inspection.pipeline_ids),
+            "tasks": list(inspection.tasks),
+            "effective_kind": inspection.effective_kind,
+            "content_hash": inspection.content_hash,
+        }
+    except Exception as exc:
+        _print_error(exc, json_output=json_output)
+        raise typer.Exit(1) from exc
+    _plugin_json_or_print(payload, json_output)
+
+
+@plugin_app.command("list")
+def plugin_list(
+    ctx: typer.Context,
+    check_env: bool = typer.Option(False, "--check-env", help="Check node-local environments"),
+    json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON"),
+) -> None:
+    try:
+        root = project_root(ctx.obj)
+        records = plugin_records(root)
+        if check_env:
+            checker = NodeEnvChecker()
+            for record in records:
+                if record["lock_status"] != "ready":
+                    continue
+                results = [checker.check_node(node_id) for node_id in record["node_ids"]]
+                record["env_status"] = "ready" if all(result.ok for result in results) else "missing"
+                record["env_checks"] = [result.as_dict() for result in results]
+        payload = {"schema": "sure-eval/plugin-list@v1", "project_dir": str(root), "plugins": records}
+    except Exception as exc:
+        _print_error(exc, json_output=json_output)
+        raise typer.Exit(1) from exc
+    if json_output:
+        _plugin_json_or_print(payload, True)
+        return
+    table = Table(title=f"SURE-EVAL plugins ({len(records)})")
+    for column in ("Name", "Kind", "Source", "Lock", "Env"):
+        table.add_column(column)
+    for record in records:
+        table.add_row(record["name"], record.get("effective_kind", ""), record.get("source", ""), record["lock_status"], record["env_status"])
+    console.print(table)
+
+
+@plugin_app.command("check")
+def plugin_check(
+    ctx: typer.Context,
+    name: str = typer.Argument(..., help="Plugin name"),
+    json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON"),
+) -> None:
+    try:
+        records = plugin_records(ctx.obj)
+        record = next((item for item in records if item["name"] == name), None)
+        if record is None:
+            raise PluginError(f"Plugin not found: {name}")
+        if record["lock_status"] == "ready":
+            results = [NodeEnvChecker().check_node(node_id) for node_id in record["node_ids"]]
+            record["env_status"] = "ready" if all(result.ok for result in results) else "missing"
+            record["env_checks"] = [result.as_dict() for result in results]
+        payload = {"schema": "sure-eval/plugin-check@v1", "plugin": record}
+    except Exception as exc:
+        _print_error(exc, json_output=json_output)
+        raise typer.Exit(1) from exc
+    _plugin_json_or_print(payload, json_output)
+    if record["lock_status"] != "ready" or record.get("env_status") == "missing":
+        raise typer.Exit(1)
+
+
+@plugin_app.command("remove")
+def plugin_remove(
+    ctx: typer.Context,
+    name: str = typer.Argument(..., help="Plugin name"),
+    json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON"),
+) -> None:
+    try:
+        removed = remove_plugin(name, project_dir=ctx.obj)
+        if not removed:
+            raise PluginError(f"Plugin not found: {name}")
+        get_registry().invalidate_project_plugins()
+        payload = {"name": name, "removed": True}
+    except Exception as exc:
+        _print_error(exc, json_output=json_output)
+        raise typer.Exit(1) from exc
+    _plugin_json_or_print(payload, json_output)
+
+
+@plugin_app.command("sync")
+def plugin_sync(
+    ctx: typer.Context,
+    name: Optional[str] = typer.Argument(None, help="Optional plugin name"),
+    json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON"),
+) -> None:
+    try:
+        records = sync_plugins(name, project_dir=ctx.obj)
+        payload = {"schema": "sure-eval/plugin-sync@v1", "plugins": records}
+    except Exception as exc:
+        _print_error(exc, json_output=json_output)
+        raise typer.Exit(1) from exc
+    _plugin_json_or_print(payload, json_output)
+
+
 app.add_typer(metric_app, name="metric")
 app.add_typer(env_app, name="env")
 app.add_typer(agent_app, name="agent")
 app.add_typer(node_app, name="node")
+app.add_typer(plugin_app, name="plugin")

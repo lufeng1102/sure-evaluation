@@ -31,6 +31,7 @@ runtime/
 
 # Local outputs
 .sure-eval-demo/
+.sure-eval/plugins/
 artifacts/
 reports/*
 !reports/sota/

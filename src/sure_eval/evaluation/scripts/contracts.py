@@ -89,7 +89,30 @@ def load_task_routes(task: str) -> tuple[dict[str, Any], Path]:
     routes = load_yaml(path)
     routes.setdefault("routes", []).extend(_load_external_routes(task))
     routes.setdefault("routes", []).extend(_load_local_routes(task))
+    _validate_route_collection(routes.get("routes") or (), task=task)
     return routes, path
+
+
+def _validate_route_collection(routes: Any, *, task: str) -> None:
+    """Reject malformed or ambiguous route registrations before selection."""
+
+    seen: dict[str, int] = {}
+    required = ("pipeline_id", "metric", "nodes", "input_contract", "executor")
+    for index, route in enumerate(routes):
+        if not isinstance(route, dict):
+            raise ValueError(f"Route {index} for task {task!r} must be a mapping")
+        missing = [key for key in required if not route.get(key)]
+        if missing:
+            raise ValueError(
+                f"Route {index} for task {task!r} is missing: {', '.join(missing)}"
+            )
+        pipeline_id = str(route["pipeline_id"])
+        if pipeline_id in seen:
+            raise ValueError(
+                f"Duplicate route pipeline_id {pipeline_id!r} for task {task!r} "
+                f"(route indexes {seen[pipeline_id]} and {index})"
+            )
+        seen[pipeline_id] = index
 
 
 def _load_external_routes(task: str) -> list[dict[str, Any]]:
