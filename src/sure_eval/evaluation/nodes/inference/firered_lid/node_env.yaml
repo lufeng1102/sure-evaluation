@@ -13,6 +13,7 @@ models:
     revision: fedf637f03d1d62b499df647cb0da0ad004e6642
     sha256: 7dee2a280e9b11d5241a0e3d4fa60ee1520a036a2e8385f17960371cfea10093
     layout: local_dir
+    path_kind: file
     target: checkpoints/modelscope/FireRedTeam/FireRedLID/model.pth.tar
     env: FIRERED_LID_CHECKPOINT
     license: Apache-2.0

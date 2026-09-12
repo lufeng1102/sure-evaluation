@@ -331,7 +331,7 @@ class NodeEnvChecker:
                     continue
                 env_value = os.environ.get(env_name) if env_name else None
                 model_path = Path(env_value or node_path / target).expanduser()
-                if env_value and model_path.is_dir():
+                if env_value and model_path.is_dir() and model.get("path_kind") == "file":
                     model_path = model_path / Path(target).name
                 if first_declared_path is None:
                     first_declared_path = model_path

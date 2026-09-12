@@ -546,6 +546,25 @@ def test_lid_env_check_accepts_external_model_directory(
     assert result.details["checkpoint_path"] == str(model_dir / "model.pth.tar")
 
 
+def test_env_check_preserves_existing_directory_checkpoint_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from sure_eval.evaluation import env_check
+
+    checker = env_check.NodeEnvChecker()
+    node_path = Path("src/sure_eval/evaluation/nodes/transcription/qwen3_asr_1_7b")
+    node_env = checker.load_node_env("transcription/qwen3_asr_1_7b")
+    monkeypatch.setenv("QWEN3_ASR_1_7B_CHECKPOINT", "/tmp")
+
+    checkpoint_path, checkpoint_env = checker._checkpoint_path(
+        "transcription/qwen3_asr_1_7b",
+        node_path,
+        node_env,
+    )
+    assert checkpoint_env == "QWEN3_ASR_1_7B_CHECKPOINT"
+    assert checkpoint_path == Path("/tmp")
+
+
 @pytest.mark.parametrize("declare_sha256", [False, True])
 def test_env_check_skips_or_accepts_declared_checkpoint_checksum(
     monkeypatch: pytest.MonkeyPatch,
