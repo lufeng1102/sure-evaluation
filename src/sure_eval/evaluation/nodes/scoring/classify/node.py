@@ -141,21 +141,38 @@ def score_classification_files(
     spec = load_label_spec(label_spec, task=task)
     ref_rows = _read_key_text(ref_file)
     hyp_rows = _read_key_text(hyp_file)
-    result = score_classification_rows(ref_rows, hyp_rows, label_spec=spec)
     return (
         KeyTextFiles(ref_file=ref_file, hyp_file=hyp_file),
-        PipelineNodeResult(
-            stage="scoring",
-            node_id=NODE_ID,
-            version=NODE_VERSION,
-            details={
-                "backend": "classify",
-                "metric": "accuracy",
-                "label_spec": spec.as_dict(),
-                "result": result,
-            },
-            internal_stages=("label_normalization", "key_alignment", "accuracy"),
-        ),
+        score_classification_rows_node(ref_rows, hyp_rows, label_spec=spec),
+    )
+
+
+def read_classification_rows(path: str | Path) -> list[tuple[str, str]]:
+    """Read the key-label row format shared by classification-style tasks."""
+
+    return _read_key_text(str(path))
+
+
+def score_classification_rows_node(
+    references: list[tuple[str, str]],
+    predictions: list[tuple[str, str]],
+    *,
+    label_spec: LabelSpec,
+) -> PipelineNodeResult:
+    """Score in-memory label rows and return the standard classify trace node."""
+
+    result = score_classification_rows(references, predictions, label_spec=label_spec)
+    return PipelineNodeResult(
+        stage="scoring",
+        node_id=NODE_ID,
+        version=NODE_VERSION,
+        details={
+            "backend": "classify",
+            "metric": "accuracy",
+            "label_spec": label_spec.as_dict(),
+            "result": result,
+        },
+        internal_stages=("label_normalization", "key_alignment", "accuracy"),
     )
 
 

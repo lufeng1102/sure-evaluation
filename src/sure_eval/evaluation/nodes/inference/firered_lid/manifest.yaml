@@ -1,0 +1,32 @@
+id: inference/firered_lid
+version: v1
+stage: inference
+language_sensitive: false
+input_schema: audio_path_batch
+output_schema: spoken_language_predictions
+implementation: sure_eval.evaluation.nodes.inference.firered_lid.node
+default_runner: sure_eval.evaluation.nodes.inference.firered_lid.NodeLocalFireRedLIDRunner
+runtime:
+  source_repository: https://github.com/FireRedTeam/FireRedASR2S.git
+  source_revision: 4e7d9aaf4482a47cec1724807026b9b151926eb5
+  source_subdirectory: fireredasr2s/fireredlid
+  source_tree: 3f96a007bddd52e74ff475bbe083b0947f0d0669
+  model_id: FireRedTeam/FireRedLID
+  model_revision: fedf637f03d1d62b499df647cb0da0ad004e6642
+  model_sha256: 7dee2a280e9b11d5241a0e3d4fa60ee1520a036a2e8385f17960371cfea10093
+  backend: pytorch
+audio_contract:
+  sample_rate_hz: 16000
+  channels: 1
+  encoding: pcm_s16le
+inference_defaults:
+  device: cuda
+  use_half: false
+  batch_size: 1
+internal_stages:
+  - audio_decode
+  - fbank_feature_extraction
+  - encoder_decoder_inference
+  - language_token_decode
+used_by:
+  - LID utterance-level accuracy

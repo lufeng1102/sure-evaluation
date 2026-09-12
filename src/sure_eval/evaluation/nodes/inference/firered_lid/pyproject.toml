@@ -1,0 +1,16 @@
+[project]
+name = "sure-eval-inference-firered-lid"
+version = "0.1.0"
+requires-python = ">=3.10,<3.12"
+dependencies = [
+    "kaldi-native-fbank==1.15",
+    "kaldiio==2.18.0",
+    "numpy==1.26.1",
+    "setuptools==80.9.0",
+    "soundfile==0.12.1",
+    "torch==2.1.0",
+    "torchaudio==2.1.0",
+]
+
+[tool.uv]
+package = false

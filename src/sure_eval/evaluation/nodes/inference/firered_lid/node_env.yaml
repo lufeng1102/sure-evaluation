@@ -1,0 +1,36 @@
+id: inference/firered_lid
+group: lid-inference
+runtime:
+  type: uv
+  python: "3.11"
+  project: pyproject.toml
+  post_setup_script: prepare_firered_lid.py
+  optional: true
+  gpu: optional
+models:
+  - id: FireRedTeam/FireRedLID
+    provider: modelscope
+    revision: fedf637f03d1d62b499df647cb0da0ad004e6642
+    sha256: 7dee2a280e9b11d5241a0e3d4fa60ee1520a036a2e8385f17960371cfea10093
+    layout: local_dir
+    target: checkpoints/modelscope/FireRedTeam/FireRedLID/model.pth.tar
+    env: FIRERED_LID_CHECKPOINT
+    license: Apache-2.0
+    citation: FireRedASR2S, arXiv:2603.10420
+verify:
+  import_check: true
+  imports:
+    - torch
+    - soundfile
+    - kaldiio
+    - kaldi_native_fbank
+  files:
+    - runtime/fireredlid_revision.json
+    - runtime/fireredlid/__init__.py
+    - runtime/LICENSE
+    - path: cmvn.ark
+      relative_to_env: FIRERED_LID_CHECKPOINT
+      default_base: checkpoints/modelscope/FireRedTeam/FireRedLID
+    - path: dict.txt
+      relative_to_env: FIRERED_LID_CHECKPOINT
+      default_base: checkpoints/modelscope/FireRedTeam/FireRedLID
