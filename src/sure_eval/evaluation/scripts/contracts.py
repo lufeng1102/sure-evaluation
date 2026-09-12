@@ -195,6 +195,12 @@ def find_task_route(
         if value is not None:
             details.append(f"{key}={value}")
     suffix = ", ".join(details) if details else "default route"
+    skipped = _skipped_plugin_details(task=routes.get("task"))
+    if skipped:
+        raise ValueError(
+            f"No configured route found for {routes.get('task', 'task')} ({suffix}); "
+            f"skipped project plugin(s): {skipped}"
+        )
     raise ValueError(f"No configured route found for {routes.get('task', 'task')} ({suffix})")
 
 
@@ -227,7 +233,35 @@ def find_pipeline_route(
             if route_language and not resolved.get("language"):
                 resolved["language"] = route_language
             return resolved
+    skipped = _skipped_plugin_details(pipeline_id=requested_pipeline_id)
+    if skipped:
+        raise ValueError(
+            f"No configured route found for {routes.get('task', 'task')} "
+            f"(pipeline_id={pipeline_id}); skipped project plugin(s): {skipped}"
+        )
     raise ValueError(f"No configured route found for {routes.get('task', 'task')} (pipeline_id={pipeline_id})")
+
+
+def _skipped_plugin_details(*, task: str | None = None, pipeline_id: str | None = None) -> str:
+    """Summarize project plugins omitted before import for route diagnostics."""
+
+    from sure_eval.evaluation.node_registry import get_registry
+    from sure_eval.evaluation.plugin_management import plugin_records
+
+    details: list[str] = []
+    project_dir = get_registry()._project_dir
+    for record in plugin_records(project_dir):
+        if record.get("lock_status") == "ready":
+            continue
+        if pipeline_id and pipeline_id not in record.get("pipeline_ids", []):
+            continue
+        if task and str(task).lower() not in {str(item).lower() for item in record.get("tasks", [])}:
+            continue
+        details.append(
+            f"{record.get('name')} [{record.get('lock_status')}: "
+            f"{record.get('reason') or 'no reason'}]"
+        )
+    return ", ".join(details)
 
 
 def route_execution_metric(route: dict[str, Any]) -> str:

@@ -260,6 +260,14 @@ def content_hash(root: Path, include: list[str] | None = None) -> str:
     return f"sha256:{digest.hexdigest()}"
 
 
+def _file_hash(path: Path) -> str:
+    """Hash a declared resource manifest with the same newline normalization."""
+
+    digest = hashlib.sha256()
+    digest.update(path.read_bytes().replace(b"\r\n", b"\n"))
+    return f"sha256:{digest.hexdigest()}"
+
+
 def inspect_plugin(path: str | Path, *, name: str | None = None) -> PluginInspection:
     plugin_path = Path(path).expanduser().resolve()
     if not plugin_path.is_dir():
@@ -292,10 +300,14 @@ def inspect_plugin(path: str | Path, *, name: str | None = None) -> PluginInspec
         if not include_path.is_file():
             raise PluginError(f"hash_include file does not exist: {item}")
     resource_manifest = str(manifest.get("resource_manifest") or "")
+    resource_hashes: dict[str, str] = {}
     if resource_manifest:
         resource_path = (plugin_path / resource_manifest).resolve()
         if plugin_path not in resource_path.parents or not resource_path.exists():
             raise PluginError(f"resource_manifest must point inside plugin: {resource_manifest}")
+        if not resource_path.is_file():
+            raise PluginError(f"resource_manifest must point to a file: {resource_manifest}")
+        resource_hashes[resource_manifest.replace("\\", "/")] = _file_hash(resource_path)
     return PluginInspection(
         name=plugin_name,
         source="path",
@@ -308,6 +320,7 @@ def inspect_plugin(path: str | Path, *, name: str | None = None) -> PluginInspec
         manifest=manifest,
         content_hash=content_hash(plugin_path, hash_include),
         resource_manifest=resource_manifest,
+        resource_hashes=resource_hashes,
     )
 
 
@@ -368,6 +381,11 @@ def _entry_for_name(entries: list[dict[str, Any]], name: str) -> dict[str, Any] 
 
 
 def add_plugin(path: str | Path, *, project_dir: str | Path | None = None, name: str | None = None, replace: bool = False) -> PluginInspection:
+    if isinstance(path, str) and path.startswith("open-bench://"):
+        raise PluginError(
+            "Open-Bench plugin sources are reserved for the second phase; "
+            "add a local plugin directory in phase 1"
+        )
     root = project_root(project_dir)
     inspection = inspect_plugin(path, name=name)
     config = _load_config(root)
@@ -423,6 +441,11 @@ def plugin_records(project_dir: str | Path | None = None) -> list[dict[str, Any]
             elif str(lock_entry.get("resolved_path")) != expected_resolved_path:
                 lock_status = "invalid"
             elif lock_entry.get("content_hash") != inspection.content_hash:
+                lock_status = "drifted"
+            elif (
+                inspection.resource_hashes
+                and lock_entry.get("resource_hashes") != inspection.resource_hashes
+            ):
                 lock_status = "drifted"
             else:
                 lock_status = "ready"

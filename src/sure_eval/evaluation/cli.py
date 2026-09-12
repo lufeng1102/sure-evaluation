@@ -362,11 +362,12 @@ def main(
     if version:
         console.print(sure_eval.__version__)
         raise typer.Exit()
+    selected_project_dir = project_dir or Path.cwd()
     try:
-        get_registry().ensure_project_plugins(project_dir)
+        get_registry().ensure_project_plugins(selected_project_dir)
     except Exception as exc:
         raise typer.BadParameter(str(exc), param_hint="--project-dir") from exc
-    ctx.obj = project_dir
+    ctx.obj = selected_project_dir
     if ctx.invoked_subcommand is None:
         console.print(ctx.get_help())
         raise typer.Exit()

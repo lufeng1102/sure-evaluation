@@ -25,13 +25,19 @@ REF_FILE = str(Path(__file__).resolve().parent.parent / "examples" / "readme" / 
 HYP_FILE = str(Path(__file__).resolve().parent.parent / "examples" / "readme" / "asr_en_hyp.txt")
 
 
-def _write_node(path: Path, node_id: str = "normalization/project_norm") -> None:
+def _write_node(
+    path: Path,
+    node_id: str = "normalization/project_norm",
+    *,
+    default_for: bool = False,
+) -> None:
     name = node_id.split("/", 1)[-1]
+    profiles = ', "profiles": {"default": {"default_for": ["asr/en/wer"]}}' if default_for else ""
     path.write_text(
         f'NODE_ID = "{node_id}"\n'
         'STAGE = "normalization"\n'
         'VERSION = "v1"\n'
-        'MANIFEST = {"id": NODE_ID, "stage": STAGE, "version": VERSION}\n'
+        f'MANIFEST = {{"id": NODE_ID, "stage": STAGE, "version": VERSION{profiles}}}\n'
         f'SELECTORS = {{"normalizer": "{name}"}}\n'
         'from sure_eval.evaluation.core.types import PipelineNodeResult\n'
         'def build(**config):\n'
@@ -129,6 +135,21 @@ def test_hash_drift_and_remove(tmp_path: Path) -> None:
     assert plugin_records(tmp_path) == []
 
 
+def test_resource_manifest_hash_is_locked(tmp_path: Path) -> None:
+    plugin = tmp_path / "resource_plugin"
+    plugin.mkdir()
+    _write_node(plugin / "node.py")
+    (plugin / "node_env.yaml").write_text("runtime: {type: pip}\n", encoding="utf-8")
+    (plugin / "sure_eval_plugin.yaml").write_text(
+        "resource_manifest: node_env.yaml\n", encoding="utf-8"
+    )
+    add_plugin(plugin, project_dir=tmp_path)
+    lock = json.loads((tmp_path / ".sure-eval" / "plugins.lock.json").read_text())
+    assert lock["plugins"][0]["resource_hashes"]["node_env.yaml"].startswith("sha256:")
+    (plugin / "node_env.yaml").write_text("runtime: {type: uv}\n", encoding="utf-8")
+    assert plugin_records(tmp_path)[0]["lock_status"] == "drifted"
+
+
 def test_drifted_plugin_is_skipped_from_registry(tmp_path: Path) -> None:
     plugin = tmp_path / "drifted"
     plugin.mkdir()
@@ -140,6 +161,28 @@ def test_drifted_plugin_is_skipped_from_registry(tmp_path: Path) -> None:
     with pytest.warns(RuntimeWarning, match="Skipping project plugin"):
         registry.ensure_project_plugins(tmp_path)
     assert all(Path(path).name != "drifted" for path in registry.project_local_paths)
+    _reset_registry()
+
+
+def test_drifted_route_reports_plugin_status_on_describe(tmp_path: Path) -> None:
+    plugin = tmp_path / "drifted_route"
+    plugin.mkdir()
+    pipeline_id = "asr.en.cer.drifted_norm_v1.wenet_cer_v1"
+    _write_route(plugin / "routes.py", pipeline_id, ("normalization/aispeech_norm", "scoring/wenet_cer"))
+    add_plugin(plugin, project_dir=tmp_path)
+    (plugin / "routes.py").write_text(
+        (plugin / "routes.py").read_text(encoding="utf-8") + "\n# drift\n", encoding="utf-8"
+    )
+    result = CliRunner().invoke(
+        app,
+        [
+            "--project-dir", str(tmp_path),
+            "metric", "describe", "asr", "--pipeline-id", pipeline_id, "--json",
+        ],
+    )
+    assert result.exit_code == 1
+    assert "drifted_route" in result.stdout
+    assert "drifted" in result.stdout
     _reset_registry()
 
 
@@ -176,6 +219,26 @@ def test_cli_add_targets_project_dir_not_cwd(tmp_path: Path, monkeypatch) -> Non
     assert result.exit_code == 0, result.stdout
     assert (tmp_path / ".sure-eval" / "plugins.yaml").exists()
     assert not (cwd / ".sure-eval").exists()
+    _reset_registry()
+
+
+def test_cli_without_project_dir_resets_to_current_directory(tmp_path: Path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    plugin = project / "route_only"
+    plugin.mkdir()
+    _write_route(plugin / "routes.py")
+    runner = CliRunner()
+    assert runner.invoke(
+        app, ["--project-dir", str(project), "plugin", "add", str(plugin), "--json"]
+    ).exit_code == 0
+
+    clean = tmp_path / "clean"
+    clean.mkdir()
+    monkeypatch.chdir(clean)
+    result = runner.invoke(app, ["plugin", "list", "--json"])
+    assert result.exit_code == 0, result.stdout
+    assert json.loads(result.stdout)["plugins"] == []
     _reset_registry()
 
 
@@ -217,6 +280,31 @@ def test_node_only_visible_in_node_list(tmp_path: Path) -> None:
     _reset_registry()
 
 
+def test_node_only_visible_in_describe_choices(tmp_path: Path) -> None:
+    plugin = tmp_path / "node_only"
+    plugin.mkdir()
+    _write_node(plugin / "node.py", default_for=True)
+    runner = CliRunner()
+    assert runner.invoke(
+        app, ["--project-dir", str(tmp_path), "plugin", "add", str(plugin), "--json"]
+    ).exit_code == 0
+
+    result = runner.invoke(
+        app,
+        [
+            "--project-dir", str(tmp_path),
+            "metric", "describe", "asr",
+            "--pipeline-id", "asr.en.wer.aispeech_norm_en_v1.wenet_wer_v1",
+            "--json",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    choices = [choice for slot in payload["pipeline"] for choice in slot["choices"]]
+    assert "normalization/project_norm" in choices
+    _reset_registry()
+
+
 # ---- acceptance: route-only full pipeline ----
 
 
@@ -255,6 +343,52 @@ def test_route_only_full_pipeline(tmp_path: Path) -> None:
     )
     assert result.exit_code == 0, result.stdout
     assert (out / "report.json").exists()
+    _reset_registry()
+
+
+def test_route_only_can_reference_node_from_another_plugin(tmp_path: Path) -> None:
+    node_plugin = tmp_path / "node_only"
+    route_plugin = tmp_path / "route_only"
+    node_plugin.mkdir()
+    route_plugin.mkdir()
+    _write_node(node_plugin / "node.py", "normalization/project_norm")
+    _write_route(
+        route_plugin / "routes.py",
+        "asr.en.cer.project_norm_v1.wenet_cer_v1",
+        ("normalization/project_norm", "scoring/wenet_cer"),
+    )
+    runner = CliRunner()
+    assert runner.invoke(
+        app, ["--project-dir", str(tmp_path), "plugin", "add", str(node_plugin), "--json"]
+    ).exit_code == 0
+    assert runner.invoke(
+        app, ["--project-dir", str(tmp_path), "plugin", "add", str(route_plugin), "--json"]
+    ).exit_code == 0
+
+    pipeline_path = tmp_path / "pipeline.json"
+    result = runner.invoke(
+        app,
+        [
+            "--project-dir", str(tmp_path),
+            "metric", "describe", "asr",
+            "--pipeline-id", "asr.en.cer.project_norm_v1.wenet_cer_v1",
+            "--output", str(pipeline_path), "--json",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    out = tmp_path / "out"
+    result = runner.invoke(
+        app,
+        [
+            "--project-dir", str(tmp_path),
+            "metric", "run", "--pipeline", str(pipeline_path),
+            "--ref-file", REF_FILE, "--hyp-file", HYP_FILE,
+            "--output-dir", str(out), "--json",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    report = json.loads((out / "report.json").read_text())
+    assert "normalization/project_norm" in [item["node_id"] for item in report["pipeline_trace"]]
     _reset_registry()
 
 
@@ -388,6 +522,9 @@ def test_manifest_rejections(tmp_path: Path) -> None:
     with pytest.raises(PluginError, match="plugin_api"):
         add_plugin(bad_api, project_dir=tmp_path)
     assert len(plugin_records(tmp_path)) == before
+
+    with pytest.raises(PluginError, match="second phase"):
+        add_plugin("open-bench://org/plugin@deadbeef", project_dir=tmp_path)
 
     bad_kind = tmp_path / "bad_kind"
     bad_kind.mkdir()
