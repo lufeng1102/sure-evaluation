@@ -72,6 +72,24 @@ def test_validate_versions_stale_bump_raises(monkeypatch) -> None:
         )
 
 
+def test_validate_versions_rejects_versions_swapped_between_nodes(monkeypatch) -> None:
+    original = get_registry().manifest
+
+    def fake_manifest(node_id):
+        manifest = dict(original(node_id))
+        if node_id == "scoring/meeteval":
+            manifest["version"] = "v2"
+        return manifest
+
+    monkeypatch.setattr(get_registry(), "manifest", fake_manifest)
+
+    with pytest.raises(ValueError, match="version mismatch"):
+        _validate_pipeline_id_versions(
+            "test.any.accuracy.classify_v2.meeteval_v1",
+            ["scoring/classify", "scoring/meeteval"],
+        )
+
+
 def test_build_pipeline_spec_rejects_stale_version(monkeypatch) -> None:
     from sure_eval.evaluation.cli_adapters import build_pipeline_spec
 

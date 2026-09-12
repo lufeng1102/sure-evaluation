@@ -12,7 +12,7 @@ from sure_eval.evaluation.scripts.contracts import (
     load_task_routes,
     load_yaml,
 )
-from sure_eval.evaluation.pipeline_identity import canonical_metric
+from sure_eval.evaluation.pipeline_identity import canonical_metric, slug
 
 ROLE_TO_CLI_ARG = {
     "ref": "ref_file",
@@ -134,40 +134,91 @@ def _validate_pipeline_id_versions(pipeline_id: str, computation_node_ids: list[
 
     The pipeline_id's component suffixes (``..._vN``) must match the actual
     manifest versions of the computation nodes, so a node version bump surfaces
-    at describe time instead of only failing at run time. Comparison is set-based
-    because bundle routes legitimately repeat a shared node (e.g. cosine trials
-    across metrics) while ``computation_node_ids`` is deduplicated.
+    at describe time instead of only failing at run time. Components are matched
+    to node ids before comparing versions so two node versions cannot be swapped
+    unnoticed. Bundle routes may repeat a shared node (e.g. cosine trials across
+    metrics) while ``computation_node_ids`` is deduplicated.
     """
 
-    declared = _pipeline_id_component_versions(pipeline_id)
+    components = _pipeline_id_components(pipeline_id)
     actual_by_node = {
         node_id: _node_manifest_version(node_id) for node_id in computation_node_ids
     }
-    declared_set = set(declared)
-    actual_set = set(actual_by_node.values())
-    if declared_set == actual_set:
+    component_bases = {
+        node_id: (
+            f"conversion_{slug(node_id.split('/', 1)[1])}"
+            if node_id.startswith("conversion/")
+            else slug(node_id.split("/", 1)[-1])
+        )
+        for node_id in computation_node_ids
+    }
+
+    declared_node_ids: list[str] = []
+    version_mismatches: dict[str, dict[str, str]] = {}
+    unmatched_components: list[str] = []
+    for component in components:
+        candidates = [
+            node_id
+            for node_id, base in component_bases.items()
+            if component.startswith(f"{base}_")
+        ]
+        if not candidates:
+            unmatched_components.append(component)
+            continue
+        node_id = max(candidates, key=lambda item: len(component_bases[item]))
+        declared_node_ids.append(node_id)
+        declared_version = component.rsplit("_", 1)[-1]
+        actual_version = actual_by_node[node_id]
+        if declared_version != actual_version:
+            version_mismatches[node_id] = {
+                "route": declared_version,
+                "manifest": actual_version,
+            }
+
+    expected_node_ids = list(computation_node_ids)
+    node_chain_matches = declared_node_ids == expected_node_ids
+    if "__" in pipeline_id and len(expected_node_ids) == len(set(expected_node_ids)):
+        node_chain_matches = _dedupe(declared_node_ids) == expected_node_ids
+
+    if not unmatched_components and not version_mismatches and node_chain_matches:
         return
-    stale = sorted(declared_set - actual_set)
-    bumped = {node_id: version for node_id, version in actual_by_node.items() if version not in declared_set}
+
     details = []
-    if stale:
-        details.append(f"route declares version(s) {stale!r} with no matching node")
-    if bumped:
-        details.append(f"node(s) {bumped!r} declare version(s) absent from the route")
+    if unmatched_components:
+        details.append(f"route component(s) {unmatched_components!r} do not match a computation node")
+    if version_mismatches:
+        details.append(f"node version(s) differ: {version_mismatches!r}")
+    if not node_chain_matches:
+        details.append(
+            f"route node chain {declared_node_ids!r} does not match {expected_node_ids!r}"
+        )
     raise ValueError(f"pipeline_id version mismatch: {'; '.join(details)}")
 
 
 def _pipeline_id_component_versions(pipeline_id: str) -> list[str]:
     """Extract node version suffixes from an atomic or bundle pipeline_id."""
 
-    body = str(pipeline_id).split(".", 3)[3]
+    return [component.rsplit("_", 1)[-1] for component in _pipeline_id_components(pipeline_id)]
+
+
+def _pipeline_id_components(pipeline_id: str) -> list[str]:
+    """Extract node component ids from an atomic or bundle pipeline_id."""
+
+    parts = str(pipeline_id).split(".", 3)
+    if len(parts) != 4:
+        raise ValueError(f"Invalid pipeline_id: {pipeline_id!r}")
+    body = parts[3]
     if "__" in body:
-        versions: list[str] = []
+        components: list[str] = []
         for member in body.split("__"):
             parts = member.split(".")
-            versions.extend(part.rsplit("_", 1)[-1] for part in parts[1:])
-        return versions
-    return [part.rsplit("_", 1)[-1] for part in body.split(".")]
+            components.extend(parts[1:])
+        return components
+    return body.split(".")
+
+
+def _dedupe(values: list[str]) -> list[str]:
+    return list(dict.fromkeys(values))
 
 
 def _node_manifest_version(node_id: str) -> str:
