@@ -14,7 +14,7 @@ from typing import Any
 import yaml
 
 from sure_eval.evaluation.cache import CACHE_ENV_VAR, get_cache_root
-from sure_eval.evaluation.scripts.contracts import NODES_ROOT, load_node_manifest
+from sure_eval.evaluation.scripts.contracts import NODES_ROOT
 
 NODE_LOCAL_PROJECTS = {
     "scoring/bleurt_20",
@@ -147,9 +147,6 @@ class NodeEnvChecker:
 
     def check_node(self, node_id: str) -> EnvCheckResult:
         registration = self._registration(node_id)
-        if registration is not None and registration.source != "builtin":
-            return self._check_external_node(node_id, registration)
-        manifest, _ = load_node_manifest(node_id)
         node_path = self._node_path(node_id)
         node_env = self.load_node_env(node_id)
         runtime = self._runtime(node_id, node_path, node_env=node_env)
@@ -160,7 +157,11 @@ class NodeEnvChecker:
                 runtime=runtime,
                 required=False,
                 status="ok",
-                message="in-process node",
+                message=(
+                    "in-process plugin node"
+                    if registration is not None and registration.source != "builtin"
+                    else "in-process node"
+                ),
             )
         if runtime == "binary":
             return self._check_binary_node(node_id, node_path, node_env or {})
@@ -246,6 +247,9 @@ class NodeEnvChecker:
     def load_node_env(self, node_id: str) -> dict[str, Any] | None:
         """Load optional node environment metadata."""
 
+        registration = self._registration(node_id)
+        if registration is not None and registration.source != "builtin":
+            return dict(registration.node_env) if registration.node_env is not None else None
         path = self.node_env_path(node_id)
         if not path.exists():
             return None
@@ -265,37 +269,12 @@ class NodeEnvChecker:
         except KeyError:
             return None
 
-    def _check_external_node(self, node_id: str, registration) -> EnvCheckResult:
-        """Check an external (plugin) node from its in-module ``NODE_ENV``."""
-
-        node_env = registration.node_env
-        if not node_env:
-            return EnvCheckResult(
-                name=node_id,
-                node_id=node_id,
-                runtime="in_process",
-                required=False,
-                status="ok",
-                message="in-process plugin node",
-            )
-        runtime_type = str((node_env.get("runtime") or {}).get("type") or "").strip()
-        runtime = {"binary": "binary", "pip": "pip_optional", "uv": "node_local_project"}.get(
-            runtime_type, "node_local_project"
-        )
-        return EnvCheckResult(
-            name=node_id,
-            node_id=node_id,
-            runtime=runtime,
-            required=True,
-            status="warning",
-            message=(
-                f"plugin node declares runtime={runtime_type or 'unknown'}; "
-                "env setup for external nodes is not yet supported"
-            ),
-            details={"source": registration.source, "module": registration.module},
-        )
-
     def _node_path(self, node_id: str) -> Path:
+        registration = self._registration(node_id)
+        if registration is not None and registration.source != "builtin":
+            from sure_eval.evaluation.node_registry import get_registry
+
+            return get_registry().manifest_path(node_id).parent
         stage, name = node_id.split("/", 1)
         return self.nodes_root / stage / name
 

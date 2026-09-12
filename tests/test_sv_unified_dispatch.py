@@ -98,8 +98,6 @@ def test_evaluate_sv_files_external_metric_node(tmp_path, monkeypatch) -> None:
 
     _install_external(monkeypatch, "scoring/fake_eer", "my_eer", 0.05)
 
-    import json
-
     from tests.test_sv_pipeline import _write_sv_fixture
 
     sample_output, manifest = _write_sv_fixture(tmp_path)

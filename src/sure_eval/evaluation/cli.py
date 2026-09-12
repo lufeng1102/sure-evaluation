@@ -107,11 +107,18 @@ def list_routes(
     task: str = typer.Argument(..., help="Task name, e.g. asr, tts, kws, classification"),
     language: Optional[str] = typer.Option(None, "--language", "-l", help="Task language/profile"),
     metric: Optional[str] = typer.Option(None, "--metric", "-m", help="Canonical metric name"),
+    extra_node_path: Optional[List[str]] = typer.Option(
+        None,
+        "--extra-node-path",
+        help="Extra node module path(s) or dir(s) to resolve nodes and routes against (repeatable)",
+    ),
     json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON"),
 ) -> None:
     """List exact registered pipeline IDs without loading metric runtimes."""
 
     try:
+        if extra_node_path:
+            get_registry().local_paths = tuple(extra_node_path)
         payload = list_metric_routes(task, language=language, metric=metric)
     except Exception as exc:
         _print_error(exc, json_output=json_output)
@@ -413,12 +420,19 @@ def env_check(
         None, "--group", help="Check nodes in one node_env.yaml group"
     ),
     all_nodes: bool = typer.Option(False, "--all", help="Check all known nodes"),
+    extra_node_path: Optional[List[str]] = typer.Option(
+        None,
+        "--extra-node-path",
+        help="Extra node module path(s) or dir(s) to resolve nodes against (repeatable)",
+    ),
     json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON"),
 ) -> None:
     """Validate optional node-local environments without creating them."""
 
     if sum(bool(value) for value in (node, pipeline, task, group, all_nodes)) > 1:
         raise typer.BadParameter("Use only one of --node, --pipeline, --task, --group, or --all")
+    if extra_node_path:
+        get_registry().local_paths = tuple(extra_node_path)
     checker = NodeEnvChecker()
     node_ids = _resolve_env_node_ids(
         node=node,
@@ -466,6 +480,11 @@ def env_setup(
     no_download: bool = typer.Option(
         False, "--no-download", help="Skip checkpoint/model downloads"
     ),
+    extra_node_path: Optional[List[str]] = typer.Option(
+        None,
+        "--extra-node-path",
+        help="Extra node module path(s) or dir(s) to resolve nodes against (repeatable)",
+    ),
     json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON"),
 ) -> None:
     """Prepare node-local environments from node_env.yaml metadata."""
@@ -473,6 +492,8 @@ def env_setup(
     if sum(bool(value) for value in (node, pipeline, task, group, all_nodes)) > 1:
         raise typer.BadParameter("Use only one of --node, --pipeline, --task, --group, or --all")
     try:
+        if extra_node_path:
+            get_registry().local_paths = tuple(extra_node_path)
         node_ids = _resolve_env_node_ids(
             node=node,
             pipeline=pipeline,

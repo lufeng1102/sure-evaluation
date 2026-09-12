@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
+from typer.testing import CliRunner
+
+from sure_eval.cli import app
 from sure_eval.evaluation.node_registry import get_registry
 
 _EXAMPLES = Path(__file__).resolve().parent.parent / "examples"
@@ -111,6 +115,34 @@ def _write_route_only_dir(tmp_path: Path) -> Path:
     return package
 
 
+def _write_env_plugin_dir(tmp_path: Path) -> Path:
+    package = tmp_path / "env_plugin"
+    package.mkdir()
+    (package / "node.py").write_text(
+        'NODE_ID = "normalization/env_norm"\n'
+        'STAGE = "normalization"\n'
+        'VERSION = "v1"\n'
+        'MANIFEST = {"id": NODE_ID, "version": VERSION, "stage": STAGE}\n'
+        'NODE_ENV = {"runtime": {"type": "pip"}, "verify": {"imports": ["json"]}}\n'
+        'SELECTORS = {"normalizer": "env_norm"}\n'
+        'def build(**config):\n'
+        '    return lambda files: (files, None)\n',
+        encoding="utf-8",
+    )
+    (package / "routes.py").write_text(
+        'ROUTES = [{\n'
+        '    "language": "en",\n'
+        '    "metric": "wer",\n'
+        '    "pipeline_id": "asr.en.wer.env_norm_v1.wenet_wer_v1",\n'
+        '    "nodes": ["normalization/env_norm", "scoring/wenet_wer"],\n'
+        '    "input_contract": "scoring/wenet_wer",\n'
+        '    "executor": "sure_eval.evaluation.tasks.asr.pipeline.evaluate_asr_files",\n'
+        '}]\n',
+        encoding="utf-8",
+    )
+    return package
+
+
 def test_local_route_only_directory(tmp_path, monkeypatch) -> None:
     """A directory with only routes.py registers a route (no node.py needed)."""
     from sure_eval.evaluation.scripts.contracts import load_task_routes
@@ -139,3 +171,73 @@ def test_local_directory_registers_node_and_route(monkeypatch) -> None:
     routes, _ = load_task_routes("asr")
     ids = [route["pipeline_id"] for route in routes["routes"]]
     assert "asr.en.wer.lowercase_norm_v1.wenet_wer_v1" in ids
+
+
+def test_metric_routes_cli_accepts_local_node_and_route_directory(monkeypatch) -> None:
+    registry = get_registry()
+    monkeypatch.setattr(registry, "local_paths", ())
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "metric",
+            "routes",
+            "asr",
+            "--language",
+            "en",
+            "--metric",
+            "wer",
+            "--extra-node-path",
+            str(_LOWERCASE_NODE.parent),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    pipeline_ids = [route["pipeline_id"] for route in json.loads(result.stdout)["routes"]]
+    assert "asr.en.wer.lowercase_norm_v1.wenet_wer_v1" in pipeline_ids
+
+
+def test_env_commands_accept_local_pipeline(monkeypatch, tmp_path: Path) -> None:
+    registry = get_registry()
+    monkeypatch.setattr(registry, "local_paths", ())
+    runner = CliRunner()
+    pipeline_path = tmp_path / "pipeline.json"
+    local_path = str(_write_env_plugin_dir(tmp_path))
+
+    describe_result = runner.invoke(
+        app,
+        [
+            "metric",
+            "describe",
+            "asr",
+            "--pipeline-id",
+            "asr.en.wer.env_norm_v1.wenet_wer_v1",
+            "--extra-node-path",
+            local_path,
+            "--output",
+            str(pipeline_path),
+            "--json",
+        ],
+    )
+    assert describe_result.exit_code == 0, describe_result.stdout
+
+    for command in ("check", "setup"):
+        registry.local_paths = ()
+        args = [
+            "env",
+            command,
+            "--pipeline",
+            str(pipeline_path),
+            "--extra-node-path",
+            local_path,
+            "--json",
+        ]
+        if command == "setup":
+            args.append("--dry-run")
+        result = runner.invoke(app, args)
+        assert result.exit_code == 0, result.stdout
+        payload = json.loads(result.stdout)
+        items = payload["checks"] if command == "check" else payload["actions"]
+        assert [item["node_id"] for item in items] == ["normalization/env_norm"]
+        assert items[0]["runtime"] == ("pip_optional" if command == "check" else "pip")
