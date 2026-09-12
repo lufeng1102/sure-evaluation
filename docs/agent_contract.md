@@ -151,14 +151,29 @@ returning `Callable[[KeyTextFiles], tuple[KeyTextFiles, PipelineNodeResult]]`.
 Discovery and lifecycle:
 
 - Registration is by `[project.entry-points."sure_eval.nodes"]` (name = node id,
-  value = module path) or by a local path passed to `resolve()`.
-- `sure-eval node list` enumerates builtin + installed plugin nodes;
+  value = module path), a project-local `sure-eval plugin add <directory>`, or
+  a temporary `--extra-node-path`.
+- `sure-eval node list` enumerates builtin, installed, project-local, and
+  temporary-path plugin nodes;
   `sure-eval node create` scaffolds a template package.
 - A plugin node declares `profiles.default_for` (e.g. `ASR/en/wer`) to enter the
   matching task/language/metric `metric describe` slot choices.
-- To run a plugin node, reference its node id in `routes.yaml` and follow the
+- To run a plugin node, reference its node id in a registered route and follow the
   exact-pipeline flow (describe → run); do not guess a `pipeline_id`.
 - Plugin `NODE_ENV` is read by `env check --node <id>`; in-process plugins
   (`NODE_ENV = None`) report `ok` without environment preparation.
 
 Example: `examples/node_plugin_lowercase/`.
+
+For a project-local plugin, the agent must establish the project root before
+route discovery and use it consistently for every command:
+
+```bash
+sure-eval --project-dir <root> plugin list --json
+sure-eval --project-dir <root> plugin check <name> --json
+sure-eval --project-dir <root> metric routes <task> --language <lang> --metric <metric> --json
+```
+
+Only plugins with `lock_status=ready` enter route and node discovery. Agents
+must not rewrite `.sure-eval/plugins.lock.json` to bypass drift or trust checks.
+The complete project-plugin contract is in [Plugin Management](plugin_management.md).

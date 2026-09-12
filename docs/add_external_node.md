@@ -7,21 +7,29 @@
 
 ## 0. 一分钟概览
 
-外部节点 = **一个单文件 `node.py`** + 一条 **entry point 注册**。运行时
-`NodeRegistry` 按 `内置 / 已装插件（entry point）/ 本地路径` 三来源解析，
-task executor 经 registry 动态 dispatch——**全程不改框架与 task 源码**。
+外部节点以单文件 `node.py` 提供实现，可以通过三条用途不同的通道接入：
+
+1. `pip install` + entry point：正式分发给 Python 环境中的所有项目；
+2. `sure-eval plugin add <dir>`：固定到当前项目并写入配置和内容 lock；
+3. `--extra-node-path <dir>`：仅当前命令使用的临时调试路径。
+
+`NodeRegistry` 按“内置、entry point、项目插件、临时路径”的顺序解析，task
+executor 经 registry 动态 dispatch——**全程不改框架与 task 源码**。
 
 ```text
 node.py（写节点）
    │  NODE_ID / STAGE / VERSION / MANIFEST / NODE_ENV / SELECTORS / build()
    ▼
-pyproject.toml（注册 entry point）
-   │  [project.entry-points."sure_eval.nodes"] "scoring/my_score" = "pkg.node"
-   ▼
-pip install -e <pkg>           # 或 --extra-node-path 本地路径（零安装）
+选择注册通道
+   ├── pip install + entry point       # 正式分发
+   ├── sure-eval plugin add <dir>      # 项目固定引入
+   └── --extra-node-path <dir>         # 单次调试
    ▼
 sure-eval node list / metric routes / metric describe / metric run
 ```
+
+项目级插件还支持只含 `routes.py` 的 pipeline-only 目录，或者同一目录同时提供
+`node.py` 和 `routes.py`。完整管理契约见[插件管理](plugin_management.md)。
 
 ## 1. `node.py` 必备属性
 
@@ -198,14 +206,40 @@ normalization 节点同理（`SELECTORS = {"normalizer": ...}`，node 返回归�
 两个外部节点的 `SELECTORS` 会分别被读成 `normalizer=lowercase_norm` 与
 `scorer=exact_match`，走 registry fallback dispatch。
 
-## 4. 本地路径加载（零安装，适合调试）
+## 4. 项目级插件管理（推荐用于项目固定引入）
+
+目录准备好后执行一次 `plugin add`，后续命令会自动加载，无需重复传路径：
+
+```bash
+sure-eval plugin add ./my_plugin_dir
+sure-eval plugin list
+sure-eval plugin check my_plugin_dir
+sure-eval metric routes asr --language en --metric wer --json
+```
+
+插件目录可以只含 `node.py`、只含 `routes.py`，或同时包含两者；对应的
+`effective_kind` 分别是 `node`、`route`、`node-and-route`。项目声明和内容锁定
+分别写入 `.sure-eval/plugins.yaml` 与 `.sure-eval/plugins.lock.json`。
+
+项目根不是当前目录时，顶层 `--project-dir` 必须放在子命令之前：
+
+```bash
+sure-eval --project-dir /path/to/project plugin add /path/to/my_plugin_dir
+sure-eval --project-dir /path/to/project plugin sync
+sure-eval --project-dir /path/to/project plugin remove my_plugin_dir
+```
+
+`remove` 只移除项目声明，不删除用户的本地源码目录。三种内容形态的完整命令、
+manifest、hash 和冲突规则见[插件管理 §5](plugin_management.md#5-声明文件)。
+
+## 5. 本地路径加载（零安装，适合单次调试）
 
 `--extra-node-path`（可重复多次）指向一个本地文件或目录，`metric routes` /
 `metric describe` / `metric run` 以及 pipeline 形式的 `env setup` / `env check`
 时按路径动态加载，无需 `pip install`。一个目录里 `node.py`（节点）与
 `routes.py`（`ROUTES = [...]`）各自独立可选，三种接入形态如下。
 
-### 4.1 仅新增 node（node-only）
+### 5.1 仅新增 node（node-only）
 
 目录里只有 `node.py`，不提供 route。节点可被 `node list` 发现，也可通过
 `profiles.default_for` 进入对应 `metric describe` 的 slot `choices`；但没有
@@ -218,7 +252,7 @@ sure-eval metric describe asr --language en --metric wer \
   --extra-node-path ./my_node_dir/ --output p.json             # normalization choices 含 my_node
 ```
 
-### 4.2 仅新增 pipeline（route-only）
+### 5.2 仅新增 pipeline（route-only）
 
 目录里只有 `routes.py`，`nodes` 全部引用**已有内置节点**，无需 `node.py` 与
 `sure_eval.nodes` entry point。`pipeline_id` 必须与 `nodes` 的节点版本链一致
@@ -245,7 +279,7 @@ sure-eval metric run --pipeline p.json --extra-node-path ./my_routes_dir/ \
   --ref-file ref.txt --hyp-file hyp.txt --output-dir out
 ```
 
-### 4.3 node + pipeline（同时注册）
+### 5.3 node + pipeline（同时注册）
 
 目录里同时有 `node.py` 与 `routes.py`，对标 entry point 包（§2 的完整流程），
 只是零安装。route 的 `nodes` 引用本目录节点（可叠加内置节点），`metric run`
@@ -269,7 +303,7 @@ route 无需 entry point 名。
 > 会校验 `selected` 与 `pipeline_id` 的节点链一致（保证可复现身份）。要用
 > 本地节点，就在 route 里声明它的 node_id 并带上 `--extra-node-path`。
 
-## 5. 各 task 的外部节点要点
+## 6. 各 task 的外部节点要点
 
 - **ASR / SA-ASR**：`SELECTORS` 声明 `{"normalizer": ...}` 或 `{"scorer": ...}`，
   值会被 `_normalize_normalizer` / `_normalize_scorer` 的 registry fallback 命中。
@@ -292,7 +326,7 @@ route 无需 entry point 名。
   `SELECTORS` 声明 `{"scorer": ...}` 替换 `det_eer` / `min_dcf_p005`，节点
   `build` 返回 `node(scores, labels) -> PipelineNodeResult`。
 
-## 6. 常见问题与边界
+## 7. 常见问题与边界
 
 - **评分结果放哪**：scoring 节点的 `score` 必须是数值，放在
   `PipelineNodeResult.details["result"]["score"]`。

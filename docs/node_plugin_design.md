@@ -69,6 +69,13 @@ sure-eval metric run --pipeline p.json \
 `executor` 推断）。于是「只加 node」「只加 pipeline」或「node + pipeline 一起加」
 都能零安装落地。
 
+如果该目录需要固定到项目，而不是只在当前命令临时使用，应执行
+`sure-eval plugin add <directory>`。项目插件仍复用同一套本地路径 registry/route
+loader，但路径和内容 hash 会写入 `.sure-eval/plugins.yaml` 与
+`.sure-eval/plugins.lock.json`，之后的 `routes`、`describe`、`run` 和 `env` 命令
+自动加载。完整生命周期和三种目录形态见
+[Plugin Management](plugin_management.md)。
+
 ### 4.2 方式 B：entry point 安装（正式分发）
 
 外部包 `pyproject.toml`：
@@ -306,8 +313,8 @@ describe → pipeline.json → run_pipeline（现有流程不变）
 - 统一 callable 契约 `Callable[[KeyTextFiles], tuple[KeyTextFiles, PipelineNodeResult]]`
   不变。
 - 内建节点经适配层接入，不强制改写现有 `node.py`。
-- `pipeline_id` 稳定身份不变；本地路径节点默认不参与 `pipeline_id`（仅调试），
-  正式纳入需走 entry point（保证可复现身份）。
+- `pipeline_id` 稳定身份不变；临时 `--extra-node-path` 适合调试，项目级插件通过
+  `plugins.lock.json` 固定本地内容，正式 Python 包分发仍走 entry point。
 
 ## 11. 实施状态
 
@@ -317,8 +324,9 @@ describe → pipeline.json → run_pipeline（现有流程不变）
 | Phase 2 | ✅ 已完成 | 动态 dispatch（ASR 6 处 if-elif 加 registry fallback，外部节点可跑通） |
 | Phase 3 | ✅ 已完成 | describe 聚合 + CLI 脚手架（choices 按 default_for 聚合；node create/list） |
 | Phase 4 | ✅ 已完成 | env 集成 + 示例包 + 文档 |
-| 测试与示例 | ✅ 已完成 | 33 个单元测试（protocol/registry/commands/route-injection）+ lowercase/exact_match 示例包 |
+| 测试与示例 | ✅ 已完成 | protocol/registry/commands/route-injection + 项目插件三形态 E2E + lowercase/exact_match 示例包 |
 | route 注入 | ✅ 已完成 | `load_task_routes` 聚合 `sure_eval.routes` entry point，免改 routes.yaml |
+| 项目插件管理 | ✅ 已完成 | `plugin add/list/check/remove/sync` + `plugins.yaml`/lock，自动注入 node 与 route |
 | VAD 统一 dispatch 试点 | ✅ 已完成 | `NodePayload` 契约 + 内置 `build` 工厂 + `consumes`/`produces` 运行时校验 + VAD executor 动态装配（见 `docs/node_plugin_unified_dispatch.md` §9） |
 | SA-ASR 统一 dispatch | ✅ 已完成 | normalization/scoring 走 `registry.build`（`KeyTextFiles` 契约）+ 外部 node_id 透传（见 `docs/node_plugin_unified_dispatch.md` §9.1） |
 | SE/TSE 统一 dispatch | ✅ 已完成 | provider-backed audio 打分契约 + `_audio_quality_dispatch`/executor registry fallback（见 `docs/node_plugin_unified_dispatch.md` §9.2） |

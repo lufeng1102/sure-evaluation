@@ -140,6 +140,32 @@ python -m json.tool .sure-eval-demo/asr-en-wer/pipeline_description.json
 发现结果、pipeline JSON、运行摘要、`report.json` 和
 `pipeline_description.json` 中会出现同一个精确 `pipeline_id`。
 
+## 项目级插件
+
+一个外部插件目录可以只提供 `node.py`、只提供 `routes.py`，或同时提供两者。
+通过项目级命令添加一次后，不需要在每条命令中重复传入 `--extra-node-path`：
+
+```bash
+sure-eval plugin add ./plugins/my_plugin
+sure-eval plugin list
+sure-eval plugin check my_plugin
+```
+
+命令会写入 `.sure-eval/plugins.yaml` 和 `.sure-eval/plugins.lock.json`。之后的
+`node list`、`metric routes`、`metric describe`、`env` 和 `metric run` 会自动
+加载 lock 状态为 ready 的项目插件。项目根不是当前目录时使用顶层
+`--project-dir <root>`：
+
+```bash
+sure-eval --project-dir . metric routes asr --language en --metric wer --json
+sure-eval --project-dir . plugin sync
+sure-eval --project-dir . plugin remove my_plugin
+```
+
+Python entry point 仍用于正式分发，`--extra-node-path` 仍用于临时调试。
+Open-Bench 插件下载属于第二阶段。三种本地插件形态及完整
+`describe -> run` 案例见[插件管理](docs/plugin_management.md)。
+
 ## 选择和准备其他 Pipeline
 
 使用规范 metric 名称查询不同实现，再选择需要运行的精确 `pipeline_id`：
@@ -200,15 +226,20 @@ node-local 虚拟环境只保留在本地，不会进入安装包或 Git。
 
 ## 定制并分享
 
-Route 定义在 `src/sure_eval/evaluation/tasks/<task>/routes.yaml`。节点元数据
-位于 `src/sure_eval/evaluation/nodes/<stage>/<name>/manifest.yaml`，可选运行
-环境则由同目录的 `node_env.yaml` 声明。新增 route 会改变路由和 identity
+内置 Route 定义在 `src/sure_eval/evaluation/tasks/<task>/routes.yaml`。外部插件
+可以通过已安装的 `sure_eval.routes` entry point 或项目级 `routes.py` 增加 route。
+内置节点元数据位于 `src/sure_eval/evaluation/nodes/<stage>/<name>/manifest.yaml`，
+可选运行环境由同目录的 `node_env.yaml` 声明。新增 route 会改变路由和 identity
 元数据，而具体计算仍由对应的版本化节点负责。
 
 如果希望把自己的评估链路分享给社区，先阅读
 [贡献指南](docs/contributing.md)。它会根据任务、metric、route、节点工具等
 不同 PR 类型进入对应手册，并连接仓库 PR template。Agent 使用者还应遵循
 [Agent Contract](docs/agent_contract.md)。
+
+如果希望把本地 node 或 pipeline 保持在框架仓库之外，可使用
+`sure-eval plugin add <directory>`；项目 lock 会固定 route 发现和执行所使用的
+本地内容，详见[插件管理](docs/plugin_management.md)。
 
 社区 pipeline 可以在 [Open Bench](https://www.open-bench.net/sure) 分享与
 查看；使用情况和社区反馈能帮助合作者识别被广泛采用的评估链路。

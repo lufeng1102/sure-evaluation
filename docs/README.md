@@ -21,6 +21,23 @@ sure-eval env check --pipeline pipeline.json
 sure-eval metric run --pipeline pipeline.json ...
 ```
 
+For a project-local node or route plugin, add its directory once and then use
+the same standard flow without repeating `--extra-node-path`:
+
+```bash
+sure-eval plugin add ./plugins/my_plugin
+sure-eval plugin list
+sure-eval plugin check my_plugin
+sure-eval metric routes <task> --language <lang> --metric <metric> --json
+```
+
+A plugin directory may contain only `node.py`, only `routes.py`, or both.
+`.sure-eval/plugins.yaml` declares the project plugins and
+`.sure-eval/plugins.lock.json` fixes their inspected content. Use installed
+entry points for formal Python distribution and reserve `--extra-node-path`
+for temporary debugging. See [Plugin Management](plugin_management.md) for
+the complete add, use, sync, and remove lifecycle.
+
 ## Contribute
 
 Start with [Contributing](contributing.md). It classifies the PR and links to a
@@ -33,8 +50,9 @@ To add a versioned node that ships outside the repository (a plugin), see
 `node.py`, registering an entry point, injecting a route, and running the result.
 The project-level plugin management architecture is documented in
 [Plugin Management](plugin_management.md); the local-path `add/list/check/remove/sync`
-commands are now available. Open-Bench download and remote revision support remain planned
-for the second phase.
+commands are now available for node-only, route-only, and node-and-route
+plugins. Open-Bench download and remote revision support remain planned for
+the second phase.
 
 ## Agent Integration
 

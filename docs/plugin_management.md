@@ -27,10 +27,13 @@ SURE-EVAL 有两种不同的插件使用方式，不能混为同一套安装机�
 插件内容由 `routes` 和 `nodes` 两个声明集合决定，`effective_kind` 由这两个集合
 派生，真值以两个集合为准：
 
+这里的「route」就是一条 pipeline 的声明（`pipeline_id` + `metric` + `nodes` +
+`input_contract` + `executor`）；「仅 pipeline」场景即 `effective_kind = route`。
+
 | `effective_kind` | 提供内容 | 说明 |
 |---|---|---|
-| `node` | `nodes` 非空，`routes` 为空 | 只能被发现或经 `manifest.profiles.default_for` 进入 describe choices，不能单独评分 |
-| `route` | `routes` 非空，`nodes` 为空 | route-only；route 可以全部引用内置节点 |
+| `node` | `nodes` 非空，`routes` 为空 | 只能被发现或经 `manifest.profiles.default_for` 进入 describe choices，不能单独评分；要真正参与评分，需被某个 route（内置、其他插件或 `default_for`）引用 |
+| `route` | `routes` 非空，`nodes` 为空 | route-only；route 的 `nodes` 可以引用内置节点或其他插件提供的 node |
 | `node-and-route` | `nodes`、`routes` 均非空 | 同时提供节点和 pipeline route |
 
 `kind` 是可选声明字段，仅作为一致性断言：未声明时自动推导；已声明但与
@@ -121,6 +124,65 @@ builtin
 routes.py      # 可选，暴露 ROUTES
 node.py        # 可选，暴露 NODE_ID/STAGE/VERSION/MANIFEST/build
 ```
+
+一个目录可以只含 `node.py`（`effective_kind = node`）、只含 `routes.py`
+（`effective_kind = route`），或两者都有（`effective_kind = node-and-route`）；三者
+都用同一个 `plugin add <dir>`，`effective_kind` 由目录内容自动推导。
+
+三种场景的最小可验收链路如下。命令中的 `--project-dir` 可省略，省略时使用当前
+工作目录；示例假设已经准备好对应的本地插件目录。
+
+### 5.1 仅新增 node
+
+目录只提供 `node.py`。如果希望它出现在已有 pipeline 的可选节点中，节点的
+`MANIFEST.profiles.*.default_for` 必须声明匹配的 `task/language/metric`；仅有
+`NODE_ID` 的 node 仍会出现在 `node list`，但不会自动进入 describe choices。
+
+```bash
+sure-eval --project-dir . plugin add ./plugins/my_node
+sure-eval --project-dir . node list --json
+sure-eval --project-dir . metric describe asr \
+  --pipeline-id asr.en.wer.aispeech_norm_en_v1.wenet_wer_v1 --json
+```
+
+该场景的插件 `effective_kind` 为 `node`，不能单独产生评分；它必须被已有 route、
+其他插件的 route 或用户编辑后的 pipeline 选择使用。
+
+### 5.2 仅新增 pipeline（route-only）
+
+目录只提供 `routes.py`，其中的 route 可以引用内置 node，也可以引用另一个已添加
+的 node 插件。添加后按标准的 `routes -> describe -> run` 链路执行：
+
+```bash
+sure-eval --project-dir . plugin add ./plugins/my_pipeline
+sure-eval --project-dir . metric routes asr --language en --metric cer --json
+sure-eval --project-dir . metric describe asr \
+  --pipeline-id asr.en.cer.my_norm_v1.wenet_cer_v1 \
+  --output pipeline.json --json
+sure-eval --project-dir . metric run --pipeline pipeline.json \
+  --ref-file ref.txt --hyp-file hyp.txt --output-dir out --json
+```
+
+该场景的插件 `effective_kind` 为 `route`，`nodes` 为空只表示插件自身不提供 node，
+不表示 route 的 `nodes` 为空。
+
+### 5.3 同时新增 node 与 pipeline
+
+目录同时提供 `node.py` 和 `routes.py`，且 route 的 `nodes` 包含该 node 的
+`NODE_ID`。添加一次即可完成注册，describe/run 的 pipeline JSON 和最终报告 trace
+必须保留该外部 node：
+
+```bash
+sure-eval --project-dir . plugin add ./plugins/my_node_and_pipeline
+sure-eval --project-dir . metric describe asr \
+  --pipeline-id asr.en.cer.my_norm_v1.wenet_cer_v1 \
+  --output pipeline.json --json
+sure-eval --project-dir . metric run --pipeline pipeline.json \
+  --ref-file ref.txt --hyp-file hyp.txt --output-dir out --json
+```
+
+该场景的插件 `effective_kind` 为 `node-and-route`；验收时同时检查
+`plugin list` 的 kind、pipeline ID 和 `report.json` 的 `pipeline_trace`。
 
 如果存在 `sure_eval_plugin.yaml`，则在加载前校验其内容。Open-Bench 来源必须有该文件，
 否则 `plugin add` 在 import 前拒绝。第一阶段无声明文件的本地目录仍按现有

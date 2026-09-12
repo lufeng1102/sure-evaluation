@@ -67,6 +67,20 @@ sure-eval metric describe <task> --pipeline-id <pipeline-id> --output pipeline.j
 sure-eval env setup --pipeline pipeline.json --dry-run --json
 ```
 
+For an external node or route maintained outside this repository, use the
+project-plugin lifecycle instead of editing builtin declarations:
+
+```bash
+sure-eval --project-dir <project> plugin add <plugin-directory>
+sure-eval --project-dir <project> plugin check <plugin-name> --json
+sure-eval --project-dir <project> metric routes <task> --language <lang> --metric <metric> --json
+```
+
+Plugin directories may be node-only, route-only, or node-and-route. Commit the
+project's `.sure-eval/plugins.yaml` and `.sure-eval/plugins.lock.json`, but not
+the managed `.sure-eval/plugins/` download directory. See
+[Plugin Management](./plugin_management.md) for the review and test matrix.
+
 ## CI Gates
 
 Required PR checks are intentionally portable: they must pass on a clean GitHub

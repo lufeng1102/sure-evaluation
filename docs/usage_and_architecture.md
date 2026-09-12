@@ -191,7 +191,7 @@ python -m json.tool .sure-eval-demo/asr-en-wer/pipeline_description.json
 ## 4. CLI 参考
 
 CLI 由 Typer 构建，入口为 `sure_eval.cli:app`，命令别名 `sure-eval` 与
-`sure-evaluation`。四个子命令组 + 根命令：
+`sure-evaluation`。五个子命令组 + 根命令：
 
 ```text
 sure-eval
@@ -206,8 +206,11 @@ sure-eval
 │   ├── setup                  # 准备节点环境（uv / binary / pip）
 │   └── download               # 下载 node_env.yaml 声明的模型/工具资产
 ├── node
-│   ├── list                   # 列出内置 + 已安装插件节点
+│   ├── list                   # 列出内置 + entry point + 项目/临时路径插件节点
 │   └── create <name>          # 生成单文件 node.py 插件包模板
+├── plugin
+│   ├── add/list/check         # 添加、列出并检查项目级插件
+│   └── sync/remove            # 校验 lock 或移除项目声明
 └── agent
     └── plan                   # 面向 Agent 的路由解析 + 环境就绪度规划
 ```
@@ -337,7 +340,7 @@ sure-eval node list [--json]
 sure-eval node create <name> --stage <stage> [-o/--output-dir <dir>]
 ```
 
-- `node list`：列出所有已发现节点（内置 + entry point 插件），含 `node_id`、
+- `node list`：列出所有已发现节点（内置 + entry point + 项目插件 + 临时路径），含 `node_id`、
   `stage`、`version`、`source`、`selectors`、`default_for`、是否有 `build`。
 - `node create`：按名称与 `--stage`（`normalization` / `scoring` 等）生成一个
   单文件 `node.py` 插件包模板，其 `pyproject.toml` 已声明 `sure_eval.nodes`
@@ -345,11 +348,27 @@ sure-eval node create <name> --stage <stage> [-o/--output-dir <dir>]
 
 ```bash
 sure-eval node create "My Norm" --stage normalization -o plugins/
-pip install -e plugins/my_norm        # 安装后自动被 node list 发现
+sure-eval plugin add plugins/my_norm  # 固定到项目；也可 pip install 走 entry point
 sure-eval node list --json | grep my_norm
 ```
 
-外部节点约定、三种注册方式与运行流程见 [14.1 节点插件化](#141-节点插件化)。
+外部节点约定、四种相关入口与运行流程见 [14.1 节点插件化](#141-节点插件化)。
+
+### 4.7 `plugin` 组
+
+```bash
+sure-eval plugin add <local-directory> [--name <name>] [--replace]
+sure-eval plugin list [--check-env] [--json]
+sure-eval plugin check <name> [--json]
+sure-eval plugin sync [<name>] [--json]
+sure-eval plugin remove <name> [--json]
+```
+
+`plugin` 组把本地插件目录固定到当前项目。目录可以只含 `node.py`、只含
+`routes.py`，或同时包含两者；添加后常规 `node`、`metric` 和 `env` 命令自动读取
+`.sure-eval/plugins.yaml` 与 `.sure-eval/plugins.lock.json`。项目根默认是当前目录，
+也可以在顶层传 `--project-dir <root>`。Open-Bench 下载仍属于第二阶段，完整契约见
+[Plugin Management](plugin_management.md)。
 
 ---
 
@@ -696,9 +715,9 @@ KeyTextFiles(ref, hyp)
 | `node.py`（或包） | 可调用的节点实现（如 `normalize_*`、`score_*`） |
 | `node_env.yaml`（可选） | 可选运行时声明：`runtime`（uv/binary/pip）、`models`、`tools`、`packages`、`verify`、`group` |
 
-> 外部节点（插件）不放在框架仓库内，而是以单文件 `node.py` 通过 entry point
-> 或本地路径在运行时加载，`MANIFEST`/`NODE_ENV` 以内联 dict 或包内相对路径
-> 提供，见 [14.1 节点插件化](#141-节点插件化)。
+> 外部节点（插件）不放在框架仓库内，而是以单文件 `node.py` 通过 entry point、
+> 项目级 `plugin add` 或临时 `--extra-node-path` 在运行时加载，`MANIFEST`/`NODE_ENV`
+> 以内联 dict 或包内相对路径提供，见 [14.1 节点插件化](#141-节点插件化)。
 
 ### 11.2 node_env.yaml 示例
 
@@ -844,10 +863,11 @@ PyTorch 2.8.0，GPU 可选），模型 `CohereLabs/cohere-transcribe-arabic-07-2
 - **新增/升级节点**：`nodes/<stage>/<name>/manifest.yaml`（版本、profiles、
   upstream）+ `node.py` + 可选的 `node_env.yaml` / `pyproject.toml` / `uv.lock`。
 - **节点插件化**：将 normalization/scoring 节点与框架解耦，支持外部节点通过
-  entry point 或本地路径在运行时加载。`sure-eval node create` 脚手架生成单文件
-  `node.py` 模板，`node list` 列出已发现节点；外部节点按 `profiles.default_for`
-  自动进入 `metric describe` 的 slot choices。详见 `docs/node_plugin_design.md`
-  与 `examples/node_plugin_lowercase/`，完整说明见 14.1。
+  entry point、项目级 `plugin add` 或临时 `--extra-node-path` 在运行时加载。
+  `sure-eval node create` 脚手架生成单文件 `node.py` 模板，`node list` 列出已发现
+  节点；外部节点按 `profiles.default_for` 自动进入 `metric describe` 的 slot
+  choices。详见 `docs/node_plugin_design.md`、`docs/plugin_management.md` 与
+  `examples/node_plugin_lowercase/`，完整说明见 14.1。
 - **新增路由**：在 `routes.yaml` 增加一条 route，`pipeline_id` 的节点版本段自动
   参与身份；计算仍由带版本节点拥有。
 - **贡献转换**：`conversion/<id>/manifest.yaml` + `convert.py`。
@@ -868,19 +888,25 @@ PyTorch 2.8.0，GPU 可选），模型 `CohereLabs/cohere-transcribe-arabic-07-2
 | `SELECTORS` | ⬜ | 让任务 dispatch 能按 selector 字符串找到本节点 |
 | `build(**config)` | ✅ | 工厂，返回 `Callable[[KeyTextFiles], tuple[KeyTextFiles, PipelineNodeResult]]` |
 
-三种注册方式：
+四种相关入口：
 
 1. **entry point（正式分发）**：包 `pyproject.toml` 声明
    `[project.entry-points."sure_eval.nodes"]`，`pip install` 后自动发现。
-2. **本地路径（调试）**：`resolve("normalization/<name>", local_paths=["/path/to/node.py"])`。
-3. **CLI 脚手架**：`sure-eval node create "My Norm" --stage normalization` 生成模板。
+2. **项目级插件（固定引入）**：`sure-eval plugin add <directory>` 写入
+   `.sure-eval/plugins.yaml` 和内容 lock，后续命令自动加载。
+3. **本地路径（临时调试）**：CLI 使用可重复的 `--extra-node-path <directory>`；
+   Python 调用方可显式传 `resolve(..., local_paths=[...])`。
+4. **CLI 脚手架**：`sure-eval node create "My Norm" --stage normalization` 生成模板，
+   再选择上述任一注册通道。
 
 命令：
 
 ```bash
-sure-eval node list --json            # 列出内置 + 已安装插件节点
+sure-eval node list --json            # 列出内置 + entry point + 项目插件节点
 sure-eval node create "My Norm" --stage normalization -o plugins/
-pip install -e plugins/my_norm        # 安装后进入 node list 与 describe choices
+sure-eval plugin add plugins/my_norm  # 固定到当前项目
+sure-eval plugin list
+# 或 pip install -e plugins/my_norm   # 通过 entry point 正式分发
 ```
 
 外部节点声明 `profiles.default_for: ["ASR/en/wer"]` 后，会自动出现在
@@ -892,7 +918,9 @@ pip install -e plugins/my_norm        # 安装后进入 node list 与 describe c
 
 完整示例：`examples/node_plugin_lowercase/`（normalization）与
 `examples/node_plugin_exact_match/`（scoring），每个包同时注册节点与 route，
-安装后即可端到端运行。
+通过 entry point 安装或作为项目插件添加后即可端到端运行。项目插件还支持
+node-only、route-only 与 node-and-route 三种目录形态，详见
+[Plugin Management](plugin_management.md)。
 
 > 提交规范：`.venv/`、`**/checkpoints/`、模型权重（`*.ckpt`/`*.pt`/`*.onnx`/
 > `*.safetensors`/`*.bin`）、运行时日志与本地结果目录均被 `.gitignore` 排除，
@@ -912,5 +940,6 @@ pip install -e plugins/my_norm        # 安装后进入 node list 与 describe c
 | 可复现性 | `docs/reproducibility.md` |
 | Agent 集成契约 | `docs/agent_contract.md` |
 | 节点插件化（外部 stage 运行时加载） | `docs/node_plugin_design.md` |
+| 项目级插件管理 | `docs/plugin_management.md` |
 | 贡献指南 | `docs/contributing.md`、`docs/add_a_metric.md`、`docs/pr_guides/` |
 | 项目总览 | `README.md` / `README_ZH.md` |

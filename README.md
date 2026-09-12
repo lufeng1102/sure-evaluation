@@ -147,6 +147,36 @@ python -m json.tool .sure-eval-demo/asr-en-wer/pipeline_description.json
 The same exact `pipeline_id` appears in the discovery result, pipeline JSON,
 run summary, `report.json`, and `pipeline_description.json`.
 
+## Project-Local Plugins
+
+An external plugin directory may provide only `node.py`, only `routes.py`, or
+both. Add it once to the current project instead of repeating
+`--extra-node-path` on every command:
+
+```bash
+sure-eval plugin add ./plugins/my_plugin
+sure-eval plugin list
+sure-eval plugin check my_plugin
+```
+
+The command writes `.sure-eval/plugins.yaml` and
+`.sure-eval/plugins.lock.json`. Subsequent `node list`, `metric routes`,
+`metric describe`, `env` and `metric run` commands load ready project plugins
+automatically. Use `--project-dir <root>` when the project root is not the
+current directory.
+
+```bash
+sure-eval --project-dir . metric routes asr --language en --metric wer --json
+sure-eval --project-dir . plugin sync
+sure-eval --project-dir . plugin remove my_plugin
+```
+
+Installed Python entry points remain the formal distribution channel, while
+`--extra-node-path` remains a temporary debugging override. Open-Bench plugin
+downloads are planned for the second phase. See
+[Plugin Management](docs/plugin_management.md) for the three supported local
+plugin shapes and their complete `describe -> run` examples.
+
 ## Select And Prepare Other Pipelines
 
 Use canonical metric names to discover alternatives, then copy the exact
@@ -212,8 +242,10 @@ bundles.
 
 ## Customize And Share
 
-Routes are declared in
-`src/sure_eval/evaluation/tasks/<task>/routes.yaml`. Node metadata lives in
+Builtin routes are declared in
+`src/sure_eval/evaluation/tasks/<task>/routes.yaml`. External plugins can add
+routes through an installed `sure_eval.routes` entry point or a project-local
+`routes.py`. Builtin node metadata lives in
 `src/sure_eval/evaluation/nodes/<stage>/<name>/manifest.yaml`; optional runtime
 requirements live beside it in `node_env.yaml`. Adding a route changes routing
 and identity metadata, while its computation remains owned by its versioned
@@ -223,6 +255,11 @@ To contribute a task, metric, route, or node tool, start with
 [Contributing](docs/contributing.md). It directs each PR type to a focused
 manual and the repository PR template. Agents should also follow the
 [Agent Contract](docs/agent_contract.md).
+
+To keep a local node or pipeline outside the framework repository, use
+`sure-eval plugin add <directory>`. The project lock records the exact local
+content used by route discovery and execution; see
+[Plugin Management](docs/plugin_management.md).
 
 Community pipelines can be shared and explored on
 [Open Bench](https://www.open-bench.net/sure), where usage and community

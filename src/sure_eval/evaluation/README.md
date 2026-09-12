@@ -317,6 +317,26 @@ The conversion path is recorded separately as `conversion_trace`, and run
 scripts persist conversion artifacts under `<output_dir>/conversion/...` when
 the conversion can affect scoring.
 
+### Project-Local Plugins
+
+External nodes and routes do not need to be copied into this package. A local
+plugin directory may provide only `node.py`, only `routes.py`, or both. Add the
+directory once to a project:
+
+```bash
+sure-eval --project-dir /path/to/project plugin add /path/to/my_plugin
+sure-eval --project-dir /path/to/project plugin list --json
+sure-eval --project-dir /path/to/project plugin check my_plugin --json
+```
+
+The project stores declarations in `.sure-eval/plugins.yaml` and inspected
+content in `.sure-eval/plugins.lock.json`. Ready plugins are included in
+`node list`, route discovery, describe, environment checks, and run. Installed
+`sure_eval.nodes`/`sure_eval.routes` entry points remain the package
+distribution channel; `--extra-node-path` is reserved for one-off debugging.
+See [Plugin Management](../../../docs/plugin_management.md) for the loading
+order and complete lifecycle.
+
 ### `tasks/`
 
 Task modules define how a benchmark task is evaluated. A task may combine

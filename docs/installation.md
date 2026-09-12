@@ -53,14 +53,57 @@ Optional root extras are installed only when needed:
 
 ```bash
 python -m pip install -e ".[audio]"        # local audio helpers
-python -m pip install -e ".[download]"     # Hugging Face / ModelScope downloads
+python -m pip install -e ".[download]"     # model assets via Hugging Face / ModelScope
 python -m pip install -e ".[diarization]"  # MeetEval for SD and SA-ASR
 python -m pip install -e ".[canonical]"    # canonical ASR normalization routes
 ```
 
 The `wetext` extra is retained as a compatibility no-op. The actual
 `normalization/wetext_norm` dependencies are owned by its node-local uv
-project.
+project. The `download` extra is for node model assets; it is unrelated to
+plugin distribution, whose future remote source is Open-Bench.
+
+## Project-Local Plugin Setup
+
+The base installation already includes project-local plugin management; no
+additional Python extra is required. A local plugin directory may contain
+only `node.py`, only `routes.py`, or both:
+
+```bash
+sure-eval plugin add ./plugins/my_plugin
+sure-eval plugin list
+sure-eval plugin check my_plugin
+```
+
+By default the current directory is the project root. From another directory,
+pass the top-level `--project-dir` option before the subcommand:
+
+```bash
+sure-eval --project-dir /path/to/project plugin add /path/to/my_plugin
+sure-eval --project-dir /path/to/project plugin sync
+```
+
+`plugin add` creates or updates `.sure-eval/plugins.yaml` and
+`.sure-eval/plugins.lock.json`. Commit both files when the project should
+reproduce the same plugin declarations. Do not commit `.sure-eval/plugins/`;
+that directory is reserved for future SURE-EVAL-managed Open-Bench downloads.
+
+After adding a plugin, the regular commands load it automatically:
+
+```bash
+sure-eval node list --json
+sure-eval metric routes asr --language en --metric wer --json
+sure-eval metric describe asr --pipeline-id <pipeline-id> --output pipeline.json
+sure-eval env check --pipeline pipeline.json
+sure-eval metric run --pipeline pipeline.json ...
+```
+
+Use `sure-eval plugin remove <name>` to remove the project declaration; local
+source directories are never deleted. Installed Python entry points remain
+the formal package distribution channel. `--extra-node-path` remains available
+for one-off development without changing project configuration. See
+[Plugin Management](plugin_management.md) for manifests, locking, precedence,
+and the three supported plugin shapes.
 
 ## Optional Cache Root
 
