@@ -48,7 +48,7 @@ SURE-EVALUATION 将所有影响分数的环节视作节点：
 ```text
 模型输出
     -> 校验 / 转换
-    -> 转录 / 归一化
+    -> 转录 / 推理 / 归一化
     -> 评分
     -> report.json + pipeline_description.json
 ```
@@ -67,7 +67,7 @@ asr.en.wer.whisper_norm_english_v1.wenet_wer_v1
 ## 评估链路图谱
 
 已提交的 catalog 可以绘制成一张全景图：每条原子 pipeline 是一条彩色链路，
-从任务出发依次流经 frontend、transcription、validation、normalization、
+从任务出发依次流经 frontend、transcription、inference、validation、normalization、
 scoring 节点，最终落为一份 report。
 
 <picture>
@@ -193,6 +193,7 @@ node-local 虚拟环境只保留在本地，不会进入安装包或 Git。
 | SLU | Accuracy | [SLU](docs/tasks/slu.md) |
 | KWS | Accuracy、macro recall、precision、recall、F1、FRR、FAR | [KWS](docs/tasks/kws.md) |
 | VAD | F1、false alarm、miss、NIST DCF、ROC AUC | [VAD](docs/tasks/vad.md) |
+| LID | 标签准确率；可选 FireRedLID 音频参考 backend | [LID](docs/tasks/lid.md) |
 
 每份任务指南都会说明输入 contract、已注册 metric、精确 pipeline ID、节点和
 运行示例。自动生成的 [pipeline catalog](docs/pipeline_catalog.md) 包含已声明

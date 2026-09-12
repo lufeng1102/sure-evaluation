@@ -43,6 +43,9 @@ jobs:
           uv run --python 3.11 --extra dev --extra audio --extra canonical sure-eval env setup --node normalization/nemo_norm --dry-run --json
           uv run --python 3.11 --extra dev --extra audio --extra canonical sure-eval env setup --task tts --language zh --metrics tts_cer,dnsmos --dry-run --json
           uv run --python 3.11 --extra dev --extra audio --extra canonical sure-eval env setup --task tse --language zh --metrics si_sdr,sim/wavlm-large,dnsmos --dry-run --json
+          uv run --python 3.11 --extra dev --extra audio --extra canonical sure-eval agent plan lid --pipeline-id lid.any.accuracy.firered_lid_v1.lid_label_canonical_v1.classify_v1 --json
+          uv run --python 3.11 --extra dev --extra audio --extra canonical sure-eval env setup --node inference/firered_lid --dry-run --json
+          uv run --python 3.11 --extra dev --extra audio --extra canonical sure-eval env download --node inference/firered_lid --dry-run --json
           uv run --python 3.11 --extra dev --extra audio --extra canonical sure-eval env download --node transcription/qwen3_asr_1_7b --dry-run --json
           uv run --python 3.11 --extra dev --extra audio --extra canonical sure-eval env download --node transcription/whisper_large_v3 --dry-run --json
           uv run --python 3.11 --extra dev --extra audio --extra canonical sure-eval env download --node scoring/dnsmos --dry-run --json
@@ -97,3 +100,10 @@ jobs:
             --extra canonical \
             --extra diarization \
             pytest tests/test_arabic_nemo_asr_pipeline.py -q
+          uv run \
+            --python 3.11 \
+            --extra dev \
+            --extra audio \
+            --extra canonical \
+            --extra diarization \
+            pytest tests/test_lid_pipeline.py -q

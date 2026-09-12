@@ -23,7 +23,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 CATALOG = REPO_ROOT / "docs" / "pipeline_catalog.jsonl"
 OUT_DIR = REPO_ROOT / "docs" / "atlas"
 
-STAGES = ("frontend", "transcription", "validation", "normalization", "scoring")
+STAGES = ("frontend", "transcription", "inference", "validation", "normalization", "scoring")
 
 # Color families: the eight validated categorical hues go to the eight largest
 # task groups; remaining small task groups share a neutral gray. Identity is
