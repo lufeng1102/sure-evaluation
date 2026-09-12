@@ -200,32 +200,70 @@ normalization 节点同理（`SELECTORS = {"normalizer": ...}`，node 返回归�
 
 ## 4. 本地路径加载（零安装，适合调试）
 
-`--extra-node-path`（可重复多次）指向一个本地文件或目录，`metric describe` /
-`metric run` 时按路径动态加载，无需 `pip install`。一个目录里两类文件各自
-独立可选：
+`--extra-node-path`（可重复多次）指向一个本地文件或目录，`metric routes` /
+`metric describe` / `metric run` 以及 pipeline 形式的 `env setup` / `env check`
+时按路径动态加载，无需 `pip install`。一个目录里 `node.py`（节点）与
+`routes.py`（`ROUTES = [...]`）各自独立可选，三种接入形态如下。
 
-| 目录内容 | 效果 |
-|---|---|
-| `routes.py`（`ROUTES = [...]`） | 注册 route（新 pipeline） |
-| `node.py`（`NODE_ID`/`build`） | 注册节点 |
-| 两者都有 | 同时注册节点 + route，对标 entry point 包 |
+### 4.1 仅新增 node（node-only）
+
+目录里只有 `node.py`，不提供 route。节点可被 `node list` 发现，也可通过
+`profiles.default_for` 进入对应 `metric describe` 的 slot `choices`；但没有
+route 引用时不能独立执行评分（`metric run` 需要一条 pipeline）。
 
 ```bash
-# 只加 pipeline：目录里只有 routes.py，nodes 指向内置节点
-sure-eval metric describe asr \
-  --pipeline-id asr.en.wer.whisper_norm_english_v1.wenet_wer_v1 \
-  --extra-node-path ./my_routes_dir \
-  --output pipeline.json
+# 目录里只有 node.py（其 MANIFEST 声明 profiles.default_for = ["ASR/en/wer"]）
+sure-eval node list --extra-node-path ./my_node_dir/ --json    # 可见 my_node
+sure-eval metric describe asr --language en --metric wer \
+  --extra-node-path ./my_node_dir/ --output p.json             # normalization choices 含 my_node
+```
 
-sure-eval metric run --pipeline pipeline.json \
-  --extra-node-path ./my_routes_dir \
+### 4.2 仅新增 pipeline（route-only）
+
+目录里只有 `routes.py`，`nodes` 全部引用**已有内置节点**，无需 `node.py` 与
+`sure_eval.nodes` entry point。`pipeline_id` 必须与 `nodes` 的节点版本链一致
+（describe 阶段会校验）。
+
+```python
+# routes.py —— 引用内置 normalization/aispeech_norm + scoring/wenet_cer（en/cer）
+ROUTES = [{
+    "language": "en",
+    "metric": "cer",
+    "pipeline_id": "asr.en.cer.aispeech_norm_en_v1.wenet_cer_v1",
+    "nodes": ["normalization/aispeech_norm", "scoring/wenet_cer"],
+    "input_contract": "scoring/wenet_cer",
+    "executor": "sure_eval.evaluation.tasks.asr.pipeline.evaluate_asr_files",
+}]
+```
+
+```bash
+sure-eval metric routes asr --language en --metric cer --extra-node-path ./my_routes_dir/
+sure-eval metric describe asr \
+  --pipeline-id asr.en.cer.aispeech_norm_en_v1.wenet_cer_v1 \
+  --extra-node-path ./my_routes_dir/ --output p.json
+sure-eval metric run --pipeline p.json --extra-node-path ./my_routes_dir/ \
+  --ref-file ref.txt --hyp-file hyp.txt --output-dir out
+```
+
+### 4.3 node + pipeline（同时注册）
+
+目录里同时有 `node.py` 与 `routes.py`，对标 entry point 包（§2 的完整流程），
+只是零安装。route 的 `nodes` 引用本目录节点（可叠加内置节点），`metric run`
+时 executor 的 `find_by_selector` / `build` 自动按 `--extra-node-path` 解析。
+
+```bash
+# 目录里 node.py + routes.py 都有（如 examples/node_plugin_lowercase）
+sure-eval metric routes asr --language en --metric wer \
+  --extra-node-path ./my_norm_pkg/
+sure-eval metric describe asr \
+  --pipeline-id asr.en.wer.lowercase_norm_v1.wenet_wer_v1 \
+  --extra-node-path ./my_norm_pkg/ --output p.json
+sure-eval metric run --pipeline p.json --extra-node-path ./my_norm_pkg/ \
   --ref-file ref.txt --hyp-file hyp.txt --output-dir out
 ```
 
 route 的 task 从 `executor`（`...tasks.<task>.pipeline...`）推断，因此本地
-route 无需 entry point 名。`describe` 时本地节点出现在对应 slot 的 `choices`
-里，`run` 时 executor 的 `find_by_selector` / `build` 自动按 `--extra-node-path`
-解析。
+route 无需 entry point 名。
 
 > 注意：不能靠「改 `pipeline.json` 里 slot 的 `selected`」切换节点——run 阶段
 > 会校验 `selected` 与 `pipeline_id` 的节点链一致（保证可复现身份）。要用

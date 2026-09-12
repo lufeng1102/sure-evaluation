@@ -105,10 +105,10 @@ def _write_route_only_dir(tmp_path: Path) -> Path:
     (package / "routes.py").write_text(
         'ROUTES = [{\n'
         '    "language": "en",\n'
-        '    "metric": "wer",\n'
-        '    "pipeline_id": "asr.en.wer.whisper_norm_english_v1.wenet_wer_v1.local_only",\n'
-        '    "nodes": ["normalization/whisper_norm", "scoring/wenet_wer"],\n'
-        '    "input_contract": "scoring/wenet_wer",\n'
+        '    "metric": "cer",\n'
+        '    "pipeline_id": "asr.en.cer.aispeech_norm_en_v1.wenet_cer_v1",\n'
+        '    "nodes": ["normalization/aispeech_norm", "scoring/wenet_cer"],\n'
+        '    "input_contract": "scoring/wenet_cer",\n'
         '    "executor": "sure_eval.evaluation.tasks.asr.pipeline.evaluate_asr_files",\n'
         "}]\n"
     )
@@ -152,12 +152,12 @@ def test_local_route_only_directory(tmp_path, monkeypatch) -> None:
 
     routes, _ = load_task_routes("asr")
     ids = [route["pipeline_id"] for route in routes["routes"]]
-    assert "asr.en.wer.whisper_norm_english_v1.wenet_wer_v1.local_only" in ids
+    assert "asr.en.cer.aispeech_norm_en_v1.wenet_cer_v1" in ids
 
     # The owning task is inferred from the executor, so another task ignores it.
     vad_routes, _ = load_task_routes("vad")
     vad_ids = [route["pipeline_id"] for route in vad_routes["routes"]]
-    assert "asr.en.wer.whisper_norm_english_v1.wenet_wer_v1.local_only" not in vad_ids
+    assert "asr.en.cer.aispeech_norm_en_v1.wenet_cer_v1" not in vad_ids
 
 
 def test_local_directory_registers_node_and_route(monkeypatch) -> None:
@@ -196,6 +196,38 @@ def test_metric_routes_cli_accepts_local_node_and_route_directory(monkeypatch) -
     assert result.exit_code == 0, result.stdout
     pipeline_ids = [route["pipeline_id"] for route in json.loads(result.stdout)["routes"]]
     assert "asr.en.wer.lowercase_norm_v1.wenet_wer_v1" in pipeline_ids
+
+
+def test_node_list_and_env_download_accept_local_node_path(monkeypatch) -> None:
+    registry = get_registry()
+    monkeypatch.setattr(registry, "local_paths", ())
+    runner = CliRunner()
+    local_path = str(_LOWERCASE_NODE.parent)
+
+    list_result = runner.invoke(
+        app,
+        ["node", "list", "--extra-node-path", local_path, "--json"],
+    )
+    assert list_result.exit_code == 0, list_result.stdout
+    listed_ids = [node["node_id"] for node in json.loads(list_result.stdout)["nodes"]]
+    assert "normalization/lowercase_norm" in listed_ids
+
+    download_result = runner.invoke(
+        app,
+        [
+            "env",
+            "download",
+            "--node",
+            "normalization/lowercase_norm",
+            "--extra-node-path",
+            local_path,
+            "--dry-run",
+            "--json",
+        ],
+    )
+    assert download_result.exit_code == 0, download_result.stdout
+    downloads = json.loads(download_result.stdout)["downloads"]
+    assert downloads[0]["node_id"] == "normalization/lowercase_norm"
 
 
 def test_env_commands_accept_local_pipeline(monkeypatch, tmp_path: Path) -> None:
@@ -241,3 +273,133 @@ def test_env_commands_accept_local_pipeline(monkeypatch, tmp_path: Path) -> None
         items = payload["checks"] if command == "check" else payload["actions"]
         assert [item["node_id"] for item in items] == ["normalization/env_norm"]
         assert items[0]["runtime"] == ("pip_optional" if command == "check" else "pip")
+
+
+def test_node_only_registration_and_describe_choices(monkeypatch) -> None:
+    """仅 node.py（无 routes.py）：节点可被发现，并经 default_for 进入 describe choices。"""
+    from sure_eval.evaluation.cli_adapters import build_pipeline_spec
+
+    _install_local_paths(monkeypatch, str(_LOWERCASE_NODE))
+
+    # 节点被注册（source=local），但没有 route 引用
+    registration = get_registry().resolve("normalization/lowercase_norm")
+    assert registration.source == "local"
+
+    # describe 内置 pipeline 时，lowercase_norm 经 profiles.default_for 进入
+    # normalization slot 的 choices；无 route 引用时不成为默认节点。
+    spec = build_pipeline_spec(
+        "asr", pipeline_id="asr.en.wer.whisper_norm_english_v1.wenet_wer_v1"
+    )
+    norm_slot = next(slot for slot in spec["pipeline"] if slot["stage"] == "normalization")
+    assert "normalization/lowercase_norm" in norm_slot["choices"]
+    assert norm_slot["default"] == "normalization/whisper_norm"
+
+
+def test_route_only_pipeline_cli_end_to_end(tmp_path, monkeypatch) -> None:
+    """仅 routes.py（无 node.py）：CLI routes → describe → run 全程引用内置节点。"""
+    registry = get_registry()
+    monkeypatch.setattr(registry, "local_paths", ())
+    runner = CliRunner()
+    local_path = str(_write_route_only_dir(tmp_path))
+
+    # 1) routes 列出新 pipeline
+    routes_result = runner.invoke(
+        app,
+        [
+            "metric", "routes", "asr", "--language", "en", "--metric", "cer",
+            "--extra-node-path", local_path, "--json",
+        ],
+    )
+    assert routes_result.exit_code == 0, routes_result.stdout
+    pipeline_ids = [route["pipeline_id"] for route in json.loads(routes_result.stdout)["routes"]]
+    assert "asr.en.cer.aispeech_norm_en_v1.wenet_cer_v1" in pipeline_ids
+
+    # 2) describe 生成 pipeline.json（版本链校验须通过）
+    pipeline_path = tmp_path / "pipeline.json"
+    describe_result = runner.invoke(
+        app,
+        [
+            "metric", "describe", "asr",
+            "--pipeline-id", "asr.en.cer.aispeech_norm_en_v1.wenet_cer_v1",
+            "--extra-node-path", local_path,
+            "--output", str(pipeline_path), "--json",
+        ],
+    )
+    assert describe_result.exit_code == 0, describe_result.stdout
+
+    # 3) run，trace 全部为内置节点
+    output_dir = tmp_path / "out"
+    run_result = runner.invoke(
+        app,
+        [
+            "metric", "run", "--pipeline", str(pipeline_path),
+            "--extra-node-path", local_path,
+            "--ref-file", str(_EXAMPLES / "readme" / "asr_en_ref.txt"),
+            "--hyp-file", str(_EXAMPLES / "readme" / "asr_en_hyp.txt"),
+            "--output-dir", str(output_dir), "--json",
+        ],
+    )
+    assert run_result.exit_code == 0, run_result.stdout
+    payload = json.loads(run_result.stdout)
+    assert payload["status"] == "ok"
+    assert payload["pipeline_id"] == "asr.en.cer.aispeech_norm_en_v1.wenet_cer_v1"
+    report = json.loads((output_dir / "report.json").read_text(encoding="utf-8"))
+    assert [entry["node_id"] for entry in report["pipeline_trace"]] == [
+        "normalization/aispeech_norm",
+        "scoring/wenet_cer",
+    ]
+
+
+def test_node_and_route_cli_end_to_end(tmp_path, monkeypatch) -> None:
+    """目录同时含 node.py + routes.py：CLI routes → describe → run，trace 含外部节点。"""
+    registry = get_registry()
+    monkeypatch.setattr(registry, "local_paths", ())
+    runner = CliRunner()
+    local_path = str(_LOWERCASE_NODE.parent)
+
+    # 1) routes 列出外部节点组成的 pipeline
+    routes_result = runner.invoke(
+        app,
+        [
+            "metric", "routes", "asr", "--language", "en", "--metric", "wer",
+            "--extra-node-path", local_path, "--json",
+        ],
+    )
+    assert routes_result.exit_code == 0, routes_result.stdout
+    pipeline_ids = [route["pipeline_id"] for route in json.loads(routes_result.stdout)["routes"]]
+    assert "asr.en.wer.lowercase_norm_v1.wenet_wer_v1" in pipeline_ids
+
+    # 2) describe
+    pipeline_path = tmp_path / "pipeline.json"
+    describe_result = runner.invoke(
+        app,
+        [
+            "metric", "describe", "asr",
+            "--pipeline-id", "asr.en.wer.lowercase_norm_v1.wenet_wer_v1",
+            "--extra-node-path", local_path,
+            "--output", str(pipeline_path), "--json",
+        ],
+    )
+    assert describe_result.exit_code == 0, describe_result.stdout
+
+    # 3) run，trace 含外部 lowercase_norm + 内置 wenet_wer
+    output_dir = tmp_path / "out"
+    run_result = runner.invoke(
+        app,
+        [
+            "metric", "run", "--pipeline", str(pipeline_path),
+            "--extra-node-path", local_path,
+            "--ref-file", str(_EXAMPLES / "readme" / "asr_en_ref.txt"),
+            "--hyp-file", str(_EXAMPLES / "readme" / "asr_en_hyp.txt"),
+            "--output-dir", str(output_dir), "--json",
+        ],
+    )
+    assert run_result.exit_code == 0, run_result.stdout
+    payload = json.loads(run_result.stdout)
+    assert payload["status"] == "ok"
+    assert payload["pipeline_id"] == "asr.en.wer.lowercase_norm_v1.wenet_wer_v1"
+    report = json.loads((output_dir / "report.json").read_text(encoding="utf-8"))
+    assert [entry["node_id"] for entry in report["pipeline_trace"]] == [
+        "normalization/lowercase_norm",
+        "scoring/wenet_wer",
+    ]
