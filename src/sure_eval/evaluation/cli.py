@@ -376,10 +376,17 @@ def doctor(
 @env_app.command("list")
 def env_list(
     group: Optional[str] = typer.Option(None, "--group", help="Filter by node_env.yaml group"),
+    extra_node_path: Optional[List[str]] = typer.Option(
+        None,
+        "--extra-node-path",
+        help="Extra node module path(s) or dir(s) to resolve nodes against (repeatable)",
+    ),
     json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON"),
 ) -> None:
     """List known node environments."""
 
+    if extra_node_path:
+        get_registry().local_paths = tuple(extra_node_path)
     checker = NodeEnvChecker()
     node_ids = _node_ids_for_group(group) if group else list(iter_known_node_ids())
     checks = [_check_with_metadata(checker, node_id) for node_id in node_ids]
@@ -552,12 +559,19 @@ def env_download(
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Print planned downloads without running them"
     ),
+    extra_node_path: Optional[List[str]] = typer.Option(
+        None,
+        "--extra-node-path",
+        help="Extra node module path(s) or dir(s) to resolve nodes against (repeatable)",
+    ),
     json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON"),
 ) -> None:
     """Download model/tool assets declared by node_env.yaml when supported."""
 
     if sum(bool(value) for value in (node, task, group, all_nodes)) > 1:
         raise typer.BadParameter("Use only one of --node, --task, --group, or --all")
+    if extra_node_path:
+        get_registry().local_paths = tuple(extra_node_path)
     node_ids = _resolve_env_node_ids(
         node=node,
         pipeline=None,
@@ -819,6 +833,8 @@ def _execute_setup_action(action: dict[str, object], *, force: bool) -> dict[str
     try:
         if runtime == "uv":
             _execute_uv_setup(action, node_path=node_path, log_file=log_file, force=force)
+        elif runtime == "pip":
+            _execute_pip_setup(action, node_path=node_path, log_file=log_file)
         elif runtime == "binary":
             _execute_binary_setup(action, node_path=node_path, log_file=log_file)
         else:
@@ -875,6 +891,15 @@ def _execute_binary_setup(action: dict[str, object], *, node_path: Path, log_fil
     if not build_script:
         raise RuntimeError("binary node has no build_script in node_env.yaml")
     _run_logged(["bash", str(build_script)], cwd=node_path, log_file=log_file)
+
+
+def _execute_pip_setup(action: dict[str, object], *, node_path: Path, log_file: Path) -> None:
+    """Install packages declared by a pip-backed node in the active runtime."""
+
+    packages = [str(package) for package in action.get("packages", []) if str(package)]
+    if not packages:
+        return
+    _run_logged(["python", "-m", "pip", "install", *packages], cwd=node_path, log_file=log_file)
 
 
 def _run_logged(command: list[str], *, cwd: Path, log_file: Path) -> None:
@@ -951,10 +976,17 @@ def _print_agent_plan_table(payload: dict[str, object], *, output: Path | None) 
 
 @node_app.command("list")
 def node_list(
+    extra_node_path: Optional[List[str]] = typer.Option(
+        None,
+        "--extra-node-path",
+        help="Extra node module path(s) or dir(s) to resolve nodes against (repeatable)",
+    ),
     json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON"),
 ) -> None:
     """List registered nodes (builtin + entry point)."""
 
+    if extra_node_path:
+        get_registry().local_paths = tuple(extra_node_path)
     payload = list_nodes()
     if json_output:
         sys.stdout.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")

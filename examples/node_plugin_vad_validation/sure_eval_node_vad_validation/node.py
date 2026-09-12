@@ -32,6 +32,8 @@ SELECTORS = {}
 
 
 def build(*, metric=None, **config):
+    from dataclasses import replace
+
     from sure_eval.evaluation.core.types import NodePayload
     from sure_eval.evaluation.nodes.validation.vad_contract import (
         REQUIRED_FIELDS_BY_METRIC,
@@ -46,6 +48,15 @@ def build(*, metric=None, **config):
             payload.files.roles["reference_jsonl"],
             payload.files.roles["sample_output"],
             required_prediction_fields=required_fields,
+        )
+        # The helper is also used by the builtin node, so rewrite its trace
+        # identity here to keep the external route auditable.
+        result = replace(
+            result,
+            stage=STAGE,
+            node_id=NODE_ID,
+            version=VERSION,
+            details={**result.details, "external": True},
         )
         return payload.with_artifact("validated_bundle", validated), result
 

@@ -279,7 +279,8 @@ describe → pipeline.json → run_pipeline（现有流程不变）
 
 ## 8. 边界与失败模式
 
-- **node_id 冲突**（外部与内建同名）：默认报错要求改名，避免静默覆盖。
+- **node_id 冲突**（外部与内建同名）：内建节点优先，外部节点不会静默覆盖内建实现；
+  外部节点应使用独立的 node_id。
 - **entry point / 本地路径加载失败**：`describe` 降级 warning 跳过，`run` 命中时
   明确报错。
 - **本地路径解析**：`resolve` 支持 `.py` 单文件与目录（含 `node.py`）；相对路径

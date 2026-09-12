@@ -339,8 +339,9 @@ VAD 验证通过后，按「先契约简单、后契约复杂」的顺序推广�
    `NodePayload` 读写、`consumes` 运行时校验、内置 build 工厂、动态装配与
    `pipeline_id` 稳定。
 
-已知边界（沿用评审决定）：ASR 本期不动，仍走 `KeyTextFiles` 契约；二者经
-`run_pipeline` 的鸭子类型并存。
+已知边界：VAD 的历史试点阶段曾保持 ASR 的 `KeyTextFiles` 契约；随着 §9.4
+收敛完成，`KeyTextFiles` 现为 `NodePayload` 兼容子类，二者仍经
+`run_pipeline` 的鸭子类型并存。完整语义链的端到端运行仍受本机重型依赖与模型资源影响。
 
 ### 9.1 SA-ASR 推广（已完成）
 
@@ -445,8 +446,8 @@ frontend）此前经 `audio_semantic` 硬编码 dispatch，speaker/MOS 经
 
 边界：TTS/VC 语义链的 scoring（wenet_wer/wenet_cer）与 normalization 仍经
 `evaluate_asr_files`（ASR executor，本身已 registry 化）；本机未装 sctk / ASR 模型，
-完整语义链 `metric run` 无法端到端跑通——pre-existing 环境限制。至此仅剩 ASR
-自身载荷收敛（§8 第 5 步）。
+完整语义链 `metric run` 无法端到端跑通，这是预先存在的环境限制。ASR 载荷收敛已在
+§9.4 完成。
 
 ### 9.4 ASR 载荷收敛（已完成，推广收尾）
 

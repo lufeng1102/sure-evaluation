@@ -327,6 +327,35 @@ def test_env_setup_dry_run_builds_pip_runtime_command() -> None:
     assert "cn2an" in action["command"]
 
 
+def test_env_setup_executes_pip_runtime(monkeypatch, tmp_path: Path) -> None:
+    from sure_eval.evaluation import cli as evaluation_cli
+
+    calls = []
+    monkeypatch.setattr(
+        evaluation_cli,
+        "_setup_log_file",
+        lambda node_id: tmp_path / "setup.log",
+    )
+    monkeypatch.setattr(
+        evaluation_cli,
+        "_run_logged",
+        lambda command, *, cwd, log_file: calls.append((command, cwd, log_file)),
+    )
+    action = {
+        "node_id": "normalization/example",
+        "node_path": str(tmp_path),
+        "runtime": "pip",
+        "packages": ["example-package>=1"],
+    }
+
+    result = evaluation_cli._execute_setup_action(action, force=False)
+
+    assert result["status"] == "ok"
+    assert calls[0][0] == ["python", "-m", "pip", "install", "example-package>=1"]
+    assert calls[0][1] == tmp_path
+    assert calls[0][2] == tmp_path / "setup.log"
+
+
 def test_funasr_env_setup_dry_run_uses_frozen_uv_and_post_setup() -> None:
     runner = CliRunner()
 
