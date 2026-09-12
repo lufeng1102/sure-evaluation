@@ -8,6 +8,8 @@
 - [Pipeline Catalog](pipeline_catalog.md): committed route-to-node inventory
 - [Pipeline Atlas](atlas/index.html): the catalog drawn as one interactive map from task to report
 - [Reproducibility](reproducibility.md): identity, reports, locks, and runtime assets
+- [Plugin Management](plugin_management.md): project-local plugin declarations,
+  locks, loading precedence, and the remote-code trust boundary
 
 The standard user flow is:
 
@@ -29,6 +31,10 @@ unclear.
 To add a versioned node that ships outside the repository (a plugin), see
 [Add an External Node](add_external_node.md) — it walks through writing
 `node.py`, registering an entry point, injecting a route, and running the result.
+The project-level plugin management architecture is documented in
+[Plugin Management](plugin_management.md); the local-path `add/list/check/remove/sync`
+commands are now available. Open-Bench download and remote revision support remain planned
+for the second phase.
 
 ## Agent Integration
 
