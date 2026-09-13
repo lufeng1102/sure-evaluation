@@ -1,0 +1,28 @@
+task: LID
+language_sensitive: false
+canonical_entry: sure_eval.evaluation.tasks.lid.pipeline.evaluate_lid_files
+default_metric: accuracy
+input_contracts:
+  task/lid_key_labels:
+    purpose: spoken_language_identification_accuracy
+    required_roles: [hyp, ref]
+    optional_roles: []
+    row_format: key_label
+    alignment_key: key
+    aggregation: utterance_accuracy
+    main_report: true
+  task/lid_samples_jsonl:
+    purpose: firered_lid_reference_backend_accuracy
+    required_roles: [samples_jsonl]
+    optional_roles: []
+    row_format: lid_audio_samples_jsonl
+    alignment_key: sample_id
+    aggregation: utterance_accuracy
+    model: FireRedTeam/FireRedLID
+    main_report: true
+notes:
+  - The default route evaluates labels produced by any LID system.
+  - The FireRedLID route is an optional evaluator-owned reference backend for audio inputs.
+  - The default route accepts dataset-defined non-empty labels after canonical normalization.
+  - The FireRedLID route uses its locked ISO and Chinese regional language inventory.
+  - FireRedLID source and model assets are prepared in a node-local environment.

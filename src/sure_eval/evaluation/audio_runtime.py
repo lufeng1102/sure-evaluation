@@ -9,6 +9,22 @@ from sure_eval.evaluation.cache import get_cache_dir
 from sure_eval.evaluation.scripts.contracts import NODES_ROOT
 
 
+def build_lid_runtime(
+    *,
+    device: str = "cuda",
+) -> dict[str, Any]:
+    """Build the node-local FireRedLID runner used by LID evaluation."""
+
+    from sure_eval.evaluation.nodes.inference.firered_lid import NodeLocalFireRedLIDRunner
+
+    return {
+        "runner": NodeLocalFireRedLIDRunner(
+            node_dir=NODES_ROOT / "inference" / "firered_lid",
+            device=device,
+        )
+    }
+
+
 def build_tts_runtime(
     *,
     metrics: tuple[str, ...] | list[str],

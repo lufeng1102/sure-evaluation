@@ -245,6 +245,9 @@ def _asset_hints(node_path: Path, node_env: dict[str, Any]) -> list[dict[str, An
                 "target": target,
                 "env": item.get("env"),
             }
+            for key in ("revision", "layout", "sha256"):
+                if item.get(key):
+                    asset[key] = item[key]
             if target and not str(target).startswith("${"):
                 asset["target_path"] = str(node_path / str(target))
             assets.append(asset)
@@ -334,6 +337,11 @@ def _next_steps(blocking_issues: list[str], routes: list[dict[str, Any]]) -> lis
             command = setup.get("command") if isinstance(setup, dict) else None
             if command and command not in commands:
                 commands.append(command)
+            assets = setup.get("assets") if isinstance(setup, dict) else None
+            if assets:
+                download_command = f"sure-eval env download --node {check.get('node_id')}"
+                if download_command not in commands:
+                    commands.append(download_command)
     return commands or ["Resolve the blocking environment checks before running metrics."]
 
 

@@ -414,7 +414,10 @@ def run_pipeline_spec(
     kwargs.update({key: value for key, value in cli_values.items() if value is not None})
     if task == "kws":
         kwargs["macro_recall_false_alarms"] = macro_recall_false_alarms
-    if task in AUDIO_SAMPLE_TASKS:
+    uses_audio_samples = task in AUDIO_SAMPLE_TASKS or "samples_jsonl" in (
+        pipeline.get("required_roles") or ()
+    )
+    if uses_audio_samples:
         kwargs.update(
             _audio_sample_kwargs(
                 task, pipeline, samples_jsonl=samples_jsonl, device=device, cache_dir=cache_dir
@@ -422,7 +425,7 @@ def run_pipeline_spec(
         )
     kwargs["output_dir"] = output_dir
     _validate_required_args(pipeline, kwargs)
-    if task in AUDIO_SAMPLE_TASKS:
+    if uses_audio_samples:
         kwargs.pop("samples_jsonl", None)
     report = run_task(task, **kwargs)
     output_path = Path(output_dir)
@@ -512,6 +515,11 @@ def _describe_kwargs(
         return kwargs
     if task == "vad":
         kwargs = {"metric": metric or "f1"}
+        if pipeline_id:
+            kwargs["pipeline_id"] = pipeline_id
+        return kwargs
+    if task == "lid":
+        kwargs = {"metric": metric or "accuracy"}
         if pipeline_id:
             kwargs["pipeline_id"] = pipeline_id
         return kwargs
@@ -642,7 +650,7 @@ def _node_slots(
                 "stage": stage,
                 "selected": "default",
                 "default": node_id,
-                "nullable": stage != "scoring",
+                "nullable": stage not in {"inference", "scoring"},
                 "metric": selected_route.get("metric") if stage == "scoring" else None,
                 "choices": stage_choices or [node_id],
             }
@@ -658,7 +666,7 @@ def _node_slots(
                     "stage": stage,
                     "selected": "default",
                     "default": node_id,
-                    "nullable": stage != "scoring",
+                    "nullable": stage not in {"inference", "scoring"},
                     "metric": selected_route.get("metric") if stage == "scoring" else None,
                     "choices": _stage_choices(stage, route_choices) or [node_id],
                 }
@@ -694,7 +702,7 @@ def _run_kwargs_from_pipeline(pipeline: dict[str, Any]) -> dict[str, Any]:
         kwargs["task"] = pipeline.get("task_alias") or "classification"
         if pipeline.get("pipeline_id"):
             kwargs["pipeline_id"] = pipeline["pipeline_id"]
-    elif task in {"ser", "gr", "slu"}:
+    elif task in {"ser", "gr", "slu", "lid"}:
         if pipeline.get("pipeline_id"):
             kwargs["pipeline_id"] = pipeline["pipeline_id"]
     elif task in AUDIO_SAMPLE_TASKS or task == "sv":
@@ -810,18 +818,27 @@ def _audio_sample_kwargs(
             cache_dir=cache_dir,
             transcription_node_id=_semantic_transcription_node_from_pipeline(pipeline),
         )
+    elif task == "lid":
+        from sure_eval.evaluation.audio_runtime import build_lid_runtime
+        from sure_eval.evaluation.audio_samples import load_lid_samples_jsonl
+
+        samples = load_lid_samples_jsonl(samples_jsonl)
+        runtime = build_lid_runtime(device=device)
     else:
         return {}
-    payload = {
-        "samples": samples,
-        "mos_providers": runtime.get("mos_providers", {}),
-    }
+    payload = {"samples": samples}
+    if "mos_providers" in runtime:
+        payload["mos_providers"] = runtime["mos_providers"]
     if "transcribers" in runtime:
         payload["transcribers"] = runtime["transcribers"]
     if "speaker_providers" in runtime:
         payload["speaker_providers"] = runtime["speaker_providers"]
     if "reference_providers" in runtime:
         payload["reference_providers"] = runtime["reference_providers"]
+    if "runner" in runtime:
+        payload["runner"] = runtime["runner"]
+    if task == "lid":
+        payload["input_manifest"] = samples_jsonl
     return payload
 
 

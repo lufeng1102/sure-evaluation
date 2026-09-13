@@ -10,10 +10,31 @@ from sure_eval.evaluation.tasks.tts.types import TTSSample
 from sure_eval.evaluation.tasks.tse.types import TSESample
 from sure_eval.evaluation.tasks.vc.types import VCSample
 from sure_eval.evaluation.tasks.se.types import SESample
+from sure_eval.evaluation.tasks.lid.types import LIDSample
 
 
 class SampleJsonlError(ValueError):
     """Raised when an audio samples JSONL file violates the input contract."""
+
+
+def load_lid_samples_jsonl(path: str | Path) -> list[LIDSample]:
+    """Load LID audio paths and reference language codes from JSONL."""
+
+    rows = _read_rows(Path(path))
+    _validate_common(rows)
+    samples: list[LIDSample] = []
+    for row in rows:
+        line_no = row["_line_no"]
+        _require_fields(row, line_no, ("sample_id", "audio_path", "reference_language"))
+        samples.append(
+            LIDSample(
+                audio_path=_resolve_existing_path(row["audio_path"], path, line_no, "audio_path"),
+                reference_language=str(row["reference_language"]),
+                sample_id=str(row["sample_id"]),
+                metadata=_metadata(row, line_no),
+            )
+        )
+    return samples
 
 
 def load_tts_samples_jsonl(

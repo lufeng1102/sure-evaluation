@@ -51,7 +51,7 @@ SURE-EVALUATION treats every score-affecting step as a node:
 ```text
 model output
     -> validation / conversion
-    -> transcription / normalization
+    -> transcription / inference / normalization
     -> scoring
     -> report.json + pipeline_description.json
 ```
@@ -72,7 +72,7 @@ are bundles whose identities contain their atomic member pipelines.
 
 The committed catalog can be drawn as one map: every atomic pipeline is a
 colored ribbon that flows from its task through frontend, transcription,
-validation, normalization, and scoring nodes into a report.
+inference, validation, normalization, and scoring nodes into a report.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/atlas/pipeline_atlas_dark.svg">
@@ -203,6 +203,7 @@ packages and Git.
 | SLU | Accuracy | [SLU](docs/tasks/slu.md) |
 | KWS | Accuracy, macro recall, precision, recall, F1, FRR, FAR | [KWS](docs/tasks/kws.md) |
 | VAD | F1, false alarm, miss, NIST DCF, ROC AUC | [VAD](docs/tasks/vad.md) |
+| LID | Label accuracy; optional FireRedLID audio reference backend | [LID](docs/tasks/lid.md) |
 
 Each task guide defines its input contract, registered metrics, exact pipeline
 IDs, nodes, and run examples. The generated

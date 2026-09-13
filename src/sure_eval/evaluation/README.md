@@ -333,6 +333,9 @@ multiple nodes into one pipeline. For example:
 - SE: full-reference SI-SDR/STOI/PESQ and optional no-reference MOS scoring;
 - TSE: SI-SDR(+i) signal quality, plus optional speaker similarity, MOS, and
   ASR-based semantic WER/CER scoring;
+- LID: external LID labels -> canonical language-label normalization ->
+  utterance-level accuracy scoring, with FireRedLID as an optional audio
+  reference backend;
 - KWS/classification/SLU: task-specific loaders or normalization followed by
   scoring nodes.
 
@@ -354,6 +357,7 @@ to STM and calls MeetEval for cpWER and DER. Route hyperparameters such as
 
 Nodes are reusable pipeline stages. Current stages include:
 
+- `inference/`: task-specific audio inference nodes such as FireRedLID;
 - `normalization/`: text or prompt normalization;
 - `transcription/`: audio-to-text nodes used by semantic audio metrics;
 - `scoring/`: metric backends and scoring wrappers.

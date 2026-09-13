@@ -1,0 +1,21 @@
+task: LID
+language_sensitive: false
+routes:
+  - metric: accuracy
+    pipeline_id: lid.any.accuracy.lid_label_canonical_v1.classify_v1
+    nodes:
+      - normalization/lid_label
+      - scoring/classify
+    input_contract: task/lid_key_labels
+    label_profile: canonical
+    executor: sure_eval.evaluation.tasks.lid.pipeline.evaluate_lid_files
+  - metric: accuracy
+    method: firered_lid_reference_backend
+    pipeline_id: lid.any.accuracy.firered_lid_v1.lid_label_canonical_v1.classify_v1
+    nodes:
+      - inference/firered_lid
+      - normalization/lid_label
+      - scoring/classify
+    input_contract: task/lid_samples_jsonl
+    label_profile: canonical
+    executor: sure_eval.evaluation.tasks.lid.pipeline.evaluate_lid_samples

@@ -1,0 +1,14 @@
+id: normalization/lid_label
+version: v1
+stage: normalization
+language_sensitive: false
+profiles: [canonical]
+input_schema: spoken_language_labels
+output_schema: canonical_language_codes
+implementation: sure_eval.evaluation.nodes.normalization.lid_label.node
+internal_stages:
+  - trim
+  - casefold
+  - separator_normalization
+used_by:
+  - LID utterance-level accuracy
