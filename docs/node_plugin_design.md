@@ -18,7 +18,7 @@
 
 | 机制 | 设计 |
 |---|---|
-| 模块形态 | 节点收敛为**单文件 `node.py`**，`MANIFEST` 内联（也可用包内 `manifest.yaml`） |
+| 模块形态 | 推荐**统一插件包布局** `src/<package>/`（`node.py`/`routes.py` + `sure_eval_plugin.yaml`）；兼容第一阶段根目录平铺布局（根目录 `node.py`/`routes.py`） |
 | 多来源加载 | 节点引用支持**内置名 / 已装插件（entry point）/ 本地路径**三种来源 |
 | 脚手架 | 提供 `sure-eval node create` / `node list` 生成与列举插件 |
 | 依赖/资源 | `NODE_ENV` 声明运行时依赖，`env download` 下载模型/工具资产 |
@@ -78,11 +78,18 @@ loader，但路径和内容 hash 会写入 `.sure-eval/plugins.yaml` 与
 
 ### 4.2 方式 B：entry point 安装（正式分发）
 
-外部包 `pyproject.toml`：
+外部包采用统一插件包布局（`src/` + `sure_eval_plugin.yaml`），`pyproject.toml` 声明：
 
 ```toml
+[project]
+name = "sure-eval-node-mynorm"
+version = "0.1.0"
+
 [project.entry-points."sure_eval.nodes"]
 normalization/my_norm = "sure_eval_node_mynorm.node"
+
+[tool.setuptools.packages.find]
+where = ["src"]
 ```
 
 ```bash
@@ -90,17 +97,28 @@ pip install ./sure-eval-node-mynorm
 ```
 
 安装后框架用 `importlib.metadata.entry_points(group="sure_eval.nodes")` 自动发现。
+包布局还需 `sure_eval_plugin.yaml` 声明 `package.module` 与 `node.module`，且 entry
+point 的**名**（`normalization/my_norm`）须等于模块导出的 `NODE_ID`、**值**
+（`sure_eval_node_mynorm.node`）须等于 manifest 的 `node.module`；`plugin add` /
+`describe` 会校验这组一致性。完整字段见
+[Plugin Management §5.4](plugin_management.md#54-统一插件包布局plugin-add-与pip-install)。
 
 ### 4.3 方式 C：CLI 脚手架生成模板
 
 ```bash
 sure-eval node create "My Norm" --stage normalization
-# 生成：
+# 生成（统一插件包布局）：
 #   my_norm/
-#   ├── pyproject.toml            # 含 entry point 声明
-#   └── sure_eval_node_my_norm/
-#       └── node.py               # 模板：NODE_ID/STAGE/VERSION/MANIFEST/build 骨架
+#   ├── pyproject.toml            # 含 entry point 声明 + where = ["src"]
+#   ├── sure_eval_plugin.yaml     # package.module / node.module 声明
+#   └── src/
+#       └── sure_eval_node_my_norm/
+#           ├── __init__.py
+#           └── node.py           # 模板：NODE_ID/STAGE/VERSION/MANIFEST/build 骨架
 ```
+
+生成后 CLI 同时给出两条提示：`sure-eval plugin add <package_dir>`（项目固定引入）
+与 `pip install -e <package_dir>`（正式分发），两条通道共用同一份目录。
 
 ### 4.4 单文件 `node.py` 形态（三种方式共用）
 
@@ -159,31 +177,54 @@ def build(*, language=None, profile="lowercase", **config):
 - **describe 聚合**：节点声明 `profiles.default_for`（如 `ASR/en/wer`）后，自动
   进入对应 task/lang/metric 的 `metric describe` slot choices。
 
-下面用仓库自带的两个示例节点，走通「安装 → 注入 route → 描述 → 运行」全流程：
+下面用仓库自带的三个统一包布局示例走通「安装 → 注入 route → 描述 → 运行」全流程，
+它们分别对应三种插件能力（各自 README 有完整说明）：
 
-- **normalization**：`examples/node_plugin_lowercase`（英文小写归一化，声明
-  `SELECTORS = {"normalizer": "lowercase_norm"}`）
-- **scoring**：`examples/node_plugin_exact_match`（逐行完全匹配打分，声明
-  `SELECTORS = {"scorer": "exact_match"}`）
+- **node-only**：`examples/node_only_plugin`，只提供 `node.py`
+  （`normalization/example_identity`）
+- **route-only**：`examples/pipeline_plugin_cer`，只提供 `routes.py`，注入
+  `asr.en.cer.aispeech_norm_en_v1.wenet_cer_v1`
+- **node-and-route**：`examples/node_pipeline_plugin_wer`，同时提供节点与 route，
+  注入 `asr.en.wer.example_lowercase_v1.wenet_wer_v1`
 
-每个包除节点外，还声明一条 route（`pyproject.toml` 里
-`[project.entry-points."sure_eval.routes"]` → 模块暴露 `ROUTES` 列表）。以
-lowercase 包为例：
+三者都是 `src/` 统一包布局：`sure_eval_plugin.yaml` 以模块路径声明
+`package.module`（以及 `node.module` / `route.module`），`pyproject.toml` 用
+`[tool.setuptools.packages.find] where = ["src"]`，并把 task 映射到暴露 `ROUTES`
+的模块。以 node-and-route 包为例：
 
 ```toml
 # pyproject.toml
+[project.entry-points."sure_eval.nodes"]
+"normalization/example_lowercase" = "sure_eval_node_pipeline_plugin_wer.node"
+
 [project.entry-points."sure_eval.routes"]
-asr = "sure_eval_node_lowercase.routes"
+asr = "sure_eval_node_pipeline_plugin_wer.routes"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+```
+
+```yaml
+# sure_eval_plugin.yaml
+name: "node-pipeline-plugin-wer"
+plugin_api: "sure-eval.plugin.v1"
+kind: "node-and-route"
+package:
+  module: "sure_eval_node_pipeline_plugin_wer"
+node:
+  module: "sure_eval_node_pipeline_plugin_wer.node"
+route:
+  module: "sure_eval_node_pipeline_plugin_wer.routes"
 ```
 
 ```python
-# sure_eval_node_lowercase/routes.py
+# src/sure_eval_node_pipeline_plugin_wer/routes.py
 ROUTES = [
     {
         "language": "en",
         "metric": "wer",
-        "pipeline_id": "asr.en.wer.lowercase_norm_v1.wenet_wer_v1",
-        "nodes": ["normalization/lowercase_norm", "scoring/wenet_wer"],
+        "pipeline_id": "asr.en.wer.example_lowercase_v1.wenet_wer_v1",
+        "nodes": ["normalization/example_lowercase", "scoring/wenet_wer"],
         "input_contract": "scoring/wenet_wer",
         "executor": "sure_eval.evaluation.tasks.asr.pipeline.evaluate_asr_files",
     },
@@ -191,21 +232,25 @@ ROUTES = [
 ```
 
 ```bash
-# 1. 安装两个示例插件（节点 + route 一起注册，无需改任何仓库文件）
-pip install -e examples/node_plugin_lowercase
-pip install -e examples/node_plugin_exact_match
+# 1. 安装示例插件（节点 + route 一起注册，无需改任何仓库文件）
+pip install -e examples/node_pipeline_plugin_wer
 
-# 2. 新 route 已出现在 metric routes（lowercase_norm / exact_match 各一条）
+# 2. 新 route 已出现在 metric routes
 sure-eval metric routes asr --language en --metric wer --json
-#   asr.en.wer.lowercase_norm_v1.wenet_wer_v1
-#   asr.en.wer.whisper_norm_english_v1.exact_match_v1
+#   asr.en.wer.example_lowercase_v1.wenet_wer_v1
 
 # 3. 直接描述 + 运行
-sure-eval metric describe asr --pipeline-id asr.en.wer.lowercase_norm_v1.wenet_wer_v1 \
+sure-eval metric describe asr \
+  --pipeline-id asr.en.wer.example_lowercase_v1.wenet_wer_v1 \
   --output p.json
 sure-eval metric run --pipeline p.json --ref-file ref.txt --hyp-file hyp.txt \
   --output-dir out
 ```
+
+同一目录也可不走 `pip install`，而用项目级通道固定引入
+（`sure-eval plugin add examples/node_pipeline_plugin_wer`）；两条通道产出等价
+report，差异见
+[Plugin Management §5.4](plugin_management.md#54-统一插件包布局plugin-add-与pip-install)。
 
 框架侧 `load_task_routes` 读取内置 `routes.yaml` 后，再合并 `sure_eval.routes`
 entry point 里 `name == task` 的模块 `ROUTES`；由于它是 `metric routes` /
@@ -219,7 +264,7 @@ entry point 里 `name == task` 的模块 `ROUTES`；由于它是 `metric routes`
 
 1. route 的 `nodes` 条目经 `scripts/asr.py::_executor_selectors_from_route` 解析：
    内置节点命中 if-elif，外部节点落入 fallback `_apply_external_selectors`，读
-   `registration.selectors`（即 `SELECTORS`），得到 `normalizer=lowercase_norm`。
+   `registration.selectors`（即 `SELECTORS`），得到 `normalizer=example_lowercase`。
 2. `tasks/asr/pipeline.py::evaluate_asr_files` 的 `_normalization_node` /
    `_scoring_node` 经 registry fallback 按 node_id `resolve` 并 `build` 出 callable。
 3. `run_pipeline` 顺序执行，报告 trace 记录外部节点。
@@ -334,6 +379,7 @@ describe → pipeline.json → run_pipeline（现有流程不变）
 | ASR 载荷收敛 | ✅ 已完成 | `KeyTextFiles` 降级为 `NodePayload` 便捷别名（继承 + `roles={"ref","hyp"}`），旧插件兼容（见 `docs/node_plugin_unified_dispatch.md` §9.4） |
 | 六 executor 收敛 | ✅ 已完成 | classification/kws/s2tt/sd/slu/sv 内置 if-elif + registry fallback，外部节点真正动态 dispatch（见 `docs/node_plugin_unified_dispatch.md` §9.5） |
 | describe 版本链校验 | ✅ 已完成 | `build_pipeline_spec` 校验 route `pipeline_id` 版本链与节点 manifest 实际版本一致，版本升级即 describe 报错（见 `docs/node_plugin_unified_dispatch.md` §9.6） |
+| 统一插件包布局 | ✅ 已完成 | `src/<package>/` + `sure_eval_plugin.yaml`（`package.module`/`node.module`/`route.module`）+ pyproject entry-point 一致性校验；`node create` 直接生成统一布局；`plugin add` 与 `pip install` 两条通道共用同一目录；示例 `node_only_plugin`/`pipeline_plugin_cer`/`node_pipeline_plugin_wer`（见 `docs/plugin_management.md` §5.4） |
 
 ## 12. 后续：全 task 统一解耦
 
