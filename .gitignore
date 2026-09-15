@@ -43,3 +43,6 @@ MANIFEST.runtime*
 
 # macOS
 .DS_Store
+
+# Generated docs
+docs/usage_and_architecture.html
