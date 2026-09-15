@@ -1,0 +1,7 @@
+name: "pipeline-plugin-cer"
+plugin_api: "sure-eval.plugin.v1"
+kind: "route"
+package:
+  module: "sure_eval_pipeline_plugin_cer"
+route:
+  module: "sure_eval_pipeline_plugin_cer.routes"

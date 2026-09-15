@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import importlib.metadata
 import shutil
 from pathlib import Path
 
@@ -16,13 +17,16 @@ from sure_eval.evaluation.node_registry import get_registry
 from sure_eval.evaluation.plugin_management import (
     PluginError,
     add_plugin,
+    inspect_plugin,
     plugin_records,
     remove_plugin,
     sync_plugins,
 )
+from sure_eval.evaluation.scripts.contracts import load_task_routes
 
 REF_FILE = str(Path(__file__).resolve().parent.parent / "examples" / "readme" / "asr_en_ref.txt")
 HYP_FILE = str(Path(__file__).resolve().parent.parent / "examples" / "readme" / "asr_en_hyp.txt")
+ROOT = Path(__file__).resolve().parent.parent
 
 
 def _write_node(
@@ -39,11 +43,11 @@ def _write_node(
         'VERSION = "v1"\n'
         f'MANIFEST = {{"id": NODE_ID, "stage": STAGE, "version": VERSION{profiles}}}\n'
         f'SELECTORS = {{"normalizer": "{name}"}}\n'
-        'from sure_eval.evaluation.core.types import PipelineNodeResult\n'
-        'def build(**config):\n'
-        '    def process(files):\n'
-        '        return files, PipelineNodeResult(stage=STAGE, node_id=NODE_ID, version=VERSION, details={})\n'
-        '    return process\n',
+        "from sure_eval.evaluation.core.types import PipelineNodeResult\n"
+        "def build(**config):\n"
+        "    def process(files):\n"
+        "        return files, PipelineNodeResult(stage=STAGE, node_id=NODE_ID, version=VERSION, details={})\n"
+        "    return process\n",
         encoding="utf-8",
     )
 
@@ -65,6 +69,71 @@ def _write_route(
         "}]\n",
         encoding="utf-8",
     )
+
+
+def _write_package_plugin(
+    root: Path,
+    module_name: str,
+    *,
+    node_id: str | None = None,
+    pipeline_id: str | None = None,
+    with_pyproject: bool = True,
+) -> None:
+    package = root / "src" / module_name
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    manifest: dict[str, object] = {
+        "name": root.name,
+        "plugin_api": "sure-eval.plugin.v1",
+        "package": {"module": module_name},
+    }
+    entry_points: list[str] = []
+    if node_id:
+        _write_node(package / "node.py", node_id)
+        manifest["node"] = {"module": f"{module_name}.node"}
+        entry_points.extend(
+            [
+                '[project.entry-points."sure_eval.nodes"]',
+                f'"{node_id}" = "{module_name}.node"',
+                "",
+            ]
+        )
+    if pipeline_id:
+        nodes = (
+            (node_id, "scoring/wenet_cer")
+            if node_id
+            else (
+                "normalization/aispeech_norm",
+                "scoring/wenet_cer",
+            )
+        )
+        _write_route(package / "routes.py", pipeline_id, nodes=nodes)
+        manifest["route"] = {"module": f"{module_name}.routes"}
+        entry_points.extend(
+            [
+                '[project.entry-points."sure_eval.routes"]',
+                f'asr = "{module_name}.routes"',
+                "",
+            ]
+        )
+    manifest["kind"] = (
+        "node-and-route" if node_id and pipeline_id else "node" if node_id else "route"
+    )
+    (root / "sure_eval_plugin.yaml").write_text(
+        yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8"
+    )
+    if with_pyproject:
+        (root / "pyproject.toml").write_text(
+            "[build-system]\n"
+            'requires = ["setuptools>=61"]\n'
+            'build-backend = "setuptools.build_meta"\n\n'
+            "[project]\n"
+            f'name = "{root.name}"\n'
+            'version = "0.1.0"\n\n'
+            + "\n".join(entry_points)
+            + '\n[tool.setuptools.packages.find]\nwhere = ["src"]\n',
+            encoding="utf-8",
+        )
 
 
 def _reset_registry() -> None:
@@ -98,7 +167,18 @@ def test_add_route_only_is_visible_to_metric_routes(tmp_path: Path) -> None:
 
     result = CliRunner().invoke(
         app,
-        ["--project-dir", str(tmp_path), "metric", "routes", "asr", "--language", "en", "--metric", "cer", "--json"],
+        [
+            "--project-dir",
+            str(tmp_path),
+            "metric",
+            "routes",
+            "asr",
+            "--language",
+            "en",
+            "--metric",
+            "cer",
+            "--json",
+        ],
     )
     assert result.exit_code == 0, result.stdout
     assert "asr.en.cer.aispeech_norm_en_v1.wenet_cer_v1" in result.stdout
@@ -127,7 +207,9 @@ def test_hash_drift_and_remove(tmp_path: Path) -> None:
     plugin.mkdir()
     _write_node(plugin / "node.py")
     add_plugin(plugin, project_dir=tmp_path)
-    (plugin / "node.py").write_text((plugin / "node.py").read_text() + "# drift\n", encoding="utf-8")
+    (plugin / "node.py").write_text(
+        (plugin / "node.py").read_text() + "# drift\n", encoding="utf-8"
+    )
     assert plugin_records(tmp_path)[0]["lock_status"] == "drifted"
     with pytest.raises(PluginError, match="sync failed"):
         sync_plugins(project_dir=tmp_path)
@@ -155,7 +237,9 @@ def test_drifted_plugin_is_skipped_from_registry(tmp_path: Path) -> None:
     plugin.mkdir()
     _write_node(plugin / "node.py")
     add_plugin(plugin, project_dir=tmp_path)
-    (plugin / "node.py").write_text((plugin / "node.py").read_text() + "# drift\n", encoding="utf-8")
+    (plugin / "node.py").write_text(
+        (plugin / "node.py").read_text() + "# drift\n", encoding="utf-8"
+    )
     registry = get_registry()
     registry.invalidate_project_plugins()
     with pytest.warns(RuntimeWarning, match="Skipping project plugin"):
@@ -168,7 +252,9 @@ def test_drifted_route_reports_plugin_status_on_describe(tmp_path: Path) -> None
     plugin = tmp_path / "drifted_route"
     plugin.mkdir()
     pipeline_id = "asr.en.cer.drifted_norm_v1.wenet_cer_v1"
-    _write_route(plugin / "routes.py", pipeline_id, ("normalization/aispeech_norm", "scoring/wenet_cer"))
+    _write_route(
+        plugin / "routes.py", pipeline_id, ("normalization/aispeech_norm", "scoring/wenet_cer")
+    )
     add_plugin(plugin, project_dir=tmp_path)
     (plugin / "routes.py").write_text(
         (plugin / "routes.py").read_text(encoding="utf-8") + "\n# drift\n", encoding="utf-8"
@@ -176,8 +262,14 @@ def test_drifted_route_reports_plugin_status_on_describe(tmp_path: Path) -> None
     result = CliRunner().invoke(
         app,
         [
-            "--project-dir", str(tmp_path),
-            "metric", "describe", "asr", "--pipeline-id", pipeline_id, "--json",
+            "--project-dir",
+            str(tmp_path),
+            "metric",
+            "describe",
+            "asr",
+            "--pipeline-id",
+            pipeline_id,
+            "--json",
         ],
     )
     assert result.exit_code == 1
@@ -229,9 +321,12 @@ def test_cli_without_project_dir_resets_to_current_directory(tmp_path: Path, mon
     plugin.mkdir()
     _write_route(plugin / "routes.py")
     runner = CliRunner()
-    assert runner.invoke(
-        app, ["--project-dir", str(project), "plugin", "add", str(plugin), "--json"]
-    ).exit_code == 0
+    assert (
+        runner.invoke(
+            app, ["--project-dir", str(project), "plugin", "add", str(plugin), "--json"]
+        ).exit_code
+        == 0
+    )
 
     clean = tmp_path / "clean"
     clean.mkdir()
@@ -248,7 +343,9 @@ def test_cli_add_list_sync_remove_roundtrip(tmp_path: Path) -> None:
     _write_route(plugin / "routes.py")
     runner = CliRunner()
 
-    result = runner.invoke(app, ["--project-dir", str(tmp_path), "plugin", "add", str(plugin), "--json"])
+    result = runner.invoke(
+        app, ["--project-dir", str(tmp_path), "plugin", "add", str(plugin), "--json"]
+    )
     assert result.exit_code == 0, result.stdout
 
     result = runner.invoke(app, ["--project-dir", str(tmp_path), "plugin", "list", "--json"])
@@ -258,7 +355,9 @@ def test_cli_add_list_sync_remove_roundtrip(tmp_path: Path) -> None:
     result = runner.invoke(app, ["--project-dir", str(tmp_path), "plugin", "sync", "--json"])
     assert result.exit_code == 0, result.stdout
 
-    result = runner.invoke(app, ["--project-dir", str(tmp_path), "plugin", "remove", "route_only", "--json"])
+    result = runner.invoke(
+        app, ["--project-dir", str(tmp_path), "plugin", "remove", "route_only", "--json"]
+    )
     assert result.exit_code == 0, result.stdout
     assert plugin_records(tmp_path) == []
     _reset_registry()
@@ -272,7 +371,12 @@ def test_node_only_visible_in_node_list(tmp_path: Path) -> None:
     plugin.mkdir()
     _write_node(plugin / "node.py")
     runner = CliRunner()
-    assert runner.invoke(app, ["--project-dir", str(tmp_path), "plugin", "add", str(plugin), "--json"]).exit_code == 0
+    assert (
+        runner.invoke(
+            app, ["--project-dir", str(tmp_path), "plugin", "add", str(plugin), "--json"]
+        ).exit_code
+        == 0
+    )
 
     result = runner.invoke(app, ["--project-dir", str(tmp_path), "node", "list", "--json"])
     assert result.exit_code == 0, result.stdout
@@ -285,16 +389,23 @@ def test_node_only_visible_in_describe_choices(tmp_path: Path) -> None:
     plugin.mkdir()
     _write_node(plugin / "node.py", default_for=True)
     runner = CliRunner()
-    assert runner.invoke(
-        app, ["--project-dir", str(tmp_path), "plugin", "add", str(plugin), "--json"]
-    ).exit_code == 0
+    assert (
+        runner.invoke(
+            app, ["--project-dir", str(tmp_path), "plugin", "add", str(plugin), "--json"]
+        ).exit_code
+        == 0
+    )
 
     result = runner.invoke(
         app,
         [
-            "--project-dir", str(tmp_path),
-            "metric", "describe", "asr",
-            "--pipeline-id", "asr.en.wer.aispeech_norm_en_v1.wenet_wer_v1",
+            "--project-dir",
+            str(tmp_path),
+            "metric",
+            "describe",
+            "asr",
+            "--pipeline-id",
+            "asr.en.wer.aispeech_norm_en_v1.wenet_wer_v1",
             "--json",
         ],
     )
@@ -313,16 +424,26 @@ def test_route_only_full_pipeline(tmp_path: Path) -> None:
     plugin.mkdir()
     _write_route(plugin / "routes.py")
     runner = CliRunner()
-    assert runner.invoke(app, ["--project-dir", str(tmp_path), "plugin", "add", str(plugin), "--json"]).exit_code == 0
+    assert (
+        runner.invoke(
+            app, ["--project-dir", str(tmp_path), "plugin", "add", str(plugin), "--json"]
+        ).exit_code
+        == 0
+    )
 
     pipeline_path = tmp_path / "pipeline.json"
     result = runner.invoke(
         app,
         [
-            "--project-dir", str(tmp_path),
-            "metric", "describe", "asr",
-            "--pipeline-id", "asr.en.cer.aispeech_norm_en_v1.wenet_cer_v1",
-            "--output", str(pipeline_path),
+            "--project-dir",
+            str(tmp_path),
+            "metric",
+            "describe",
+            "asr",
+            "--pipeline-id",
+            "asr.en.cer.aispeech_norm_en_v1.wenet_cer_v1",
+            "--output",
+            str(pipeline_path),
             "--json",
         ],
     )
@@ -332,12 +453,18 @@ def test_route_only_full_pipeline(tmp_path: Path) -> None:
     result = runner.invoke(
         app,
         [
-            "--project-dir", str(tmp_path),
-            "metric", "run",
-            "--pipeline", str(pipeline_path),
-            "--ref-file", REF_FILE,
-            "--hyp-file", HYP_FILE,
-            "--output-dir", str(out),
+            "--project-dir",
+            str(tmp_path),
+            "metric",
+            "run",
+            "--pipeline",
+            str(pipeline_path),
+            "--ref-file",
+            REF_FILE,
+            "--hyp-file",
+            HYP_FILE,
+            "--output-dir",
+            str(out),
             "--json",
         ],
     )
@@ -358,21 +485,33 @@ def test_route_only_can_reference_node_from_another_plugin(tmp_path: Path) -> No
         ("normalization/project_norm", "scoring/wenet_cer"),
     )
     runner = CliRunner()
-    assert runner.invoke(
-        app, ["--project-dir", str(tmp_path), "plugin", "add", str(node_plugin), "--json"]
-    ).exit_code == 0
-    assert runner.invoke(
-        app, ["--project-dir", str(tmp_path), "plugin", "add", str(route_plugin), "--json"]
-    ).exit_code == 0
+    assert (
+        runner.invoke(
+            app, ["--project-dir", str(tmp_path), "plugin", "add", str(node_plugin), "--json"]
+        ).exit_code
+        == 0
+    )
+    assert (
+        runner.invoke(
+            app, ["--project-dir", str(tmp_path), "plugin", "add", str(route_plugin), "--json"]
+        ).exit_code
+        == 0
+    )
 
     pipeline_path = tmp_path / "pipeline.json"
     result = runner.invoke(
         app,
         [
-            "--project-dir", str(tmp_path),
-            "metric", "describe", "asr",
-            "--pipeline-id", "asr.en.cer.project_norm_v1.wenet_cer_v1",
-            "--output", str(pipeline_path), "--json",
+            "--project-dir",
+            str(tmp_path),
+            "metric",
+            "describe",
+            "asr",
+            "--pipeline-id",
+            "asr.en.cer.project_norm_v1.wenet_cer_v1",
+            "--output",
+            str(pipeline_path),
+            "--json",
         ],
     )
     assert result.exit_code == 0, result.stdout
@@ -380,10 +519,19 @@ def test_route_only_can_reference_node_from_another_plugin(tmp_path: Path) -> No
     result = runner.invoke(
         app,
         [
-            "--project-dir", str(tmp_path),
-            "metric", "run", "--pipeline", str(pipeline_path),
-            "--ref-file", REF_FILE, "--hyp-file", HYP_FILE,
-            "--output-dir", str(out), "--json",
+            "--project-dir",
+            str(tmp_path),
+            "metric",
+            "run",
+            "--pipeline",
+            str(pipeline_path),
+            "--ref-file",
+            REF_FILE,
+            "--hyp-file",
+            HYP_FILE,
+            "--output-dir",
+            str(out),
+            "--json",
         ],
     )
     assert result.exit_code == 0, result.stdout
@@ -405,16 +553,26 @@ def test_node_and_route_run_trace(tmp_path: Path) -> None:
         nodes=("normalization/project_norm", "scoring/wenet_cer"),
     )
     runner = CliRunner()
-    assert runner.invoke(app, ["--project-dir", str(tmp_path), "plugin", "add", str(plugin), "--json"]).exit_code == 0
+    assert (
+        runner.invoke(
+            app, ["--project-dir", str(tmp_path), "plugin", "add", str(plugin), "--json"]
+        ).exit_code
+        == 0
+    )
 
     pipeline_path = tmp_path / "pipeline.json"
     result = runner.invoke(
         app,
         [
-            "--project-dir", str(tmp_path),
-            "metric", "describe", "asr",
-            "--pipeline-id", "asr.en.cer.project_norm_v1.wenet_cer_v1",
-            "--output", str(pipeline_path),
+            "--project-dir",
+            str(tmp_path),
+            "metric",
+            "describe",
+            "asr",
+            "--pipeline-id",
+            "asr.en.cer.project_norm_v1.wenet_cer_v1",
+            "--output",
+            str(pipeline_path),
             "--json",
         ],
     )
@@ -424,12 +582,18 @@ def test_node_and_route_run_trace(tmp_path: Path) -> None:
     result = runner.invoke(
         app,
         [
-            "--project-dir", str(tmp_path),
-            "metric", "run",
-            "--pipeline", str(pipeline_path),
-            "--ref-file", REF_FILE,
-            "--hyp-file", HYP_FILE,
-            "--output-dir", str(out),
+            "--project-dir",
+            str(tmp_path),
+            "metric",
+            "run",
+            "--pipeline",
+            str(pipeline_path),
+            "--ref-file",
+            REF_FILE,
+            "--hyp-file",
+            HYP_FILE,
+            "--output-dir",
+            str(out),
             "--json",
         ],
     )
@@ -509,6 +673,376 @@ def test_entry_point_still_resolves_with_project_dir(tmp_path: Path, monkeypatch
     _reset_registry()
 
 
+# ---- unified src package layout ----
+
+
+def test_package_layout_node_only_visible_in_node_list(tmp_path: Path) -> None:
+    plugin = tmp_path / "package_node"
+    plugin.mkdir()
+    _write_package_plugin(
+        plugin,
+        "sure_eval_package_node",
+        node_id="normalization/package_node",
+    )
+    add_plugin(plugin, project_dir=tmp_path)
+
+    result = CliRunner().invoke(app, ["--project-dir", str(tmp_path), "node", "list", "--json"])
+    assert result.exit_code == 0, result.stdout
+    assert "normalization/package_node" in result.stdout
+    assert plugin_records(tmp_path)[0]["effective_kind"] == "node"
+    _reset_registry()
+
+
+def test_package_layout_route_only_describe_and_run(tmp_path: Path) -> None:
+    plugin = tmp_path / "package_route"
+    plugin.mkdir()
+    pipeline_id = "asr.en.cer.aispeech_norm_en_v1.wenet_cer_v1"
+    _write_package_plugin(
+        plugin,
+        "sure_eval_package_route",
+        pipeline_id=pipeline_id,
+    )
+    add_plugin(plugin, project_dir=tmp_path)
+
+    pipeline_path = tmp_path / "package-route.json"
+    runner = CliRunner()
+    describe = runner.invoke(
+        app,
+        [
+            "--project-dir",
+            str(tmp_path),
+            "metric",
+            "describe",
+            "asr",
+            "--pipeline-id",
+            pipeline_id,
+            "--output",
+            str(pipeline_path),
+            "--json",
+        ],
+    )
+    assert describe.exit_code == 0, describe.stdout
+    output_dir = tmp_path / "package-route-out"
+    result = runner.invoke(
+        app,
+        [
+            "--project-dir",
+            str(tmp_path),
+            "metric",
+            "run",
+            "--pipeline",
+            str(pipeline_path),
+            "--ref-file",
+            REF_FILE,
+            "--hyp-file",
+            HYP_FILE,
+            "--output-dir",
+            str(output_dir),
+            "--json",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert (output_dir / "report.json").exists()
+    _reset_registry()
+
+
+def test_package_layout_node_and_route_run_trace(tmp_path: Path) -> None:
+    plugin = tmp_path / "package_combined"
+    plugin.mkdir()
+    node_id = "normalization/package_combined"
+    pipeline_id = "asr.en.cer.package_combined_v1.wenet_cer_v1"
+    _write_package_plugin(
+        plugin,
+        "sure_eval_package_combined",
+        node_id=node_id,
+        pipeline_id=pipeline_id,
+    )
+    inspection = add_plugin(plugin, project_dir=tmp_path)
+    assert inspection.effective_kind == "node-and-route"
+
+    pipeline_path = tmp_path / "package-combined.json"
+    output_dir = tmp_path / "package-combined-out"
+    runner = CliRunner()
+    describe = runner.invoke(
+        app,
+        [
+            "--project-dir",
+            str(tmp_path),
+            "metric",
+            "describe",
+            "asr",
+            "--pipeline-id",
+            pipeline_id,
+            "--output",
+            str(pipeline_path),
+            "--json",
+        ],
+    )
+    assert describe.exit_code == 0, describe.stdout
+    result = runner.invoke(
+        app,
+        [
+            "--project-dir",
+            str(tmp_path),
+            "metric",
+            "run",
+            "--pipeline",
+            str(pipeline_path),
+            "--ref-file",
+            REF_FILE,
+            "--hyp-file",
+            HYP_FILE,
+            "--output-dir",
+            str(output_dir),
+            "--json",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    report = json.loads((output_dir / "report.json").read_text(encoding="utf-8"))
+    assert node_id in [entry["node_id"] for entry in report["pipeline_trace"]]
+    _reset_registry()
+
+
+def test_package_layout_supports_relative_imports_and_optional_pyproject(tmp_path: Path) -> None:
+    plugin = tmp_path / "package_relative"
+    plugin.mkdir()
+    module_name = "sure_eval_package_relative"
+    _write_package_plugin(
+        plugin,
+        module_name,
+        node_id="normalization/package_relative",
+        with_pyproject=False,
+    )
+    package = plugin / "src" / module_name
+    (package / "helper.py").write_text('MARKER = "relative-import-ok"\n', encoding="utf-8")
+    node_path = package / "node.py"
+    node_path.write_text(
+        "from .helper import MARKER\n" + node_path.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+
+    inspection = add_plugin(plugin, project_dir=tmp_path)
+    assert inspection.node_ids == ("normalization/package_relative",)
+    assert get_registry().resolve("normalization/package_relative").module.endswith(".node")
+    _reset_registry()
+
+
+@pytest.mark.parametrize(
+    ("manifest", "message"),
+    [
+        ({"plugin_api": "sure-eval.plugin.v1", "node": {"module": "pkg.node"}}, "package.module"),
+        (
+            {
+                "plugin_api": "sure-eval.plugin.v1",
+                "package": {"module": "pkg"},
+                "node": {"module": "outside.node"},
+            },
+            "must be inside",
+        ),
+        (
+            {
+                "plugin_api": "sure-eval.plugin.v1",
+                "package": {"module": "pkg"},
+                "node": {"module": "pkg.node"},
+                "nodes": ["node.py"],
+            },
+            "cannot be mixed",
+        ),
+    ],
+)
+def test_package_layout_rejects_invalid_manifest(
+    tmp_path: Path,
+    manifest: dict[str, object],
+    message: str,
+) -> None:
+    plugin = tmp_path / message.replace(" ", "_").replace(".", "_")
+    package = plugin / "src" / "pkg"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    _write_node(package / "node.py", "normalization/pkg")
+    (plugin / "sure_eval_plugin.yaml").write_text(
+        yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8"
+    )
+    with pytest.raises(PluginError, match=message):
+        add_plugin(plugin, project_dir=tmp_path)
+
+
+def test_package_layout_requires_manifest_and_init(tmp_path: Path) -> None:
+    missing_manifest = tmp_path / "missing_manifest"
+    package = missing_manifest / "src" / "pkg_missing_manifest"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    _write_node(package / "node.py")
+    with pytest.raises(PluginError, match="requires sure_eval_plugin.yaml"):
+        add_plugin(missing_manifest, project_dir=tmp_path)
+
+    missing_init = tmp_path / "missing_init"
+    package = missing_init / "src" / "pkg_missing_init"
+    package.mkdir(parents=True)
+    _write_node(package / "node.py")
+    (missing_init / "sure_eval_plugin.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "plugin_api": "sure-eval.plugin.v1",
+                "kind": "node",
+                "package": {"module": "pkg_missing_init"},
+                "node": {"module": "pkg_missing_init.node"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(PluginError, match="requires __init__.py"):
+        add_plugin(missing_init, project_dir=tmp_path)
+
+
+def test_package_layout_rejects_pyproject_identity_mismatch(tmp_path: Path) -> None:
+    plugin = tmp_path / "package_bad_identity"
+    plugin.mkdir()
+    _write_package_plugin(
+        plugin,
+        "sure_eval_package_bad_identity",
+        node_id="normalization/package_bad_identity",
+    )
+    pyproject = plugin / "pyproject.toml"
+    pyproject.write_text(
+        pyproject.read_text(encoding="utf-8").replace(
+            '"normalization/package_bad_identity"',
+            '"normalization/wrong_identity"',
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(PluginError, match="must match NODE_ID"):
+        add_plugin(plugin, project_dir=tmp_path)
+
+
+def test_package_layout_rejects_route_task_mismatch(tmp_path: Path) -> None:
+    plugin = tmp_path / "package_bad_task"
+    plugin.mkdir()
+    _write_package_plugin(
+        plugin,
+        "sure_eval_package_bad_task",
+        pipeline_id="asr.en.cer.aispeech_norm_en_v1.wenet_cer_v1",
+    )
+    pyproject = plugin / "pyproject.toml"
+    pyproject.write_text(
+        pyproject.read_text(encoding="utf-8").replace(
+            'asr = "sure_eval_package_bad_task.routes"',
+            'tts = "sure_eval_package_bad_task.routes"',
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(PluginError, match="map each route task"):
+        add_plugin(plugin, project_dir=tmp_path)
+
+
+def test_package_layout_rejects_malformed_pyproject(tmp_path: Path) -> None:
+    plugin = tmp_path / "package_bad_toml"
+    plugin.mkdir()
+    _write_package_plugin(
+        plugin,
+        "sure_eval_package_bad_toml",
+        node_id="normalization/package_bad_toml",
+    )
+    (plugin / "pyproject.toml").write_text("[project\n", encoding="utf-8")
+    with pytest.raises(PluginError, match="Cannot read pyproject.toml"):
+        add_plugin(plugin, project_dir=tmp_path)
+
+
+def test_package_layout_extra_node_path_is_supported(tmp_path: Path) -> None:
+    plugin = tmp_path / "package_extra"
+    plugin.mkdir()
+    _write_package_plugin(
+        plugin,
+        "sure_eval_package_extra",
+        node_id="normalization/package_extra",
+    )
+    registry = get_registry()
+    registry.invalidate_project_plugins()
+    registry.local_paths = (plugin,)
+    assert registry.resolve("normalization/package_extra").source == "local"
+    _reset_registry()
+
+
+def test_package_layout_replace_reloads_changed_module(tmp_path: Path) -> None:
+    plugin = tmp_path / "package_reload"
+    plugin.mkdir()
+    module_name = "sure_eval_package_reload"
+    _write_package_plugin(
+        plugin,
+        module_name,
+        node_id="normalization/package_reload",
+        with_pyproject=False,
+    )
+    add_plugin(plugin, project_dir=tmp_path)
+    assert get_registry().resolve("normalization/package_reload").version == "v1"
+
+    node_path = plugin / "src" / module_name / "node.py"
+    node_path.write_text(
+        node_path.read_text(encoding="utf-8").replace('VERSION = "v1"', 'VERSION = "v2"'),
+        encoding="utf-8",
+    )
+    add_plugin(plugin, project_dir=tmp_path, replace=True)
+    assert get_registry().resolve("normalization/package_reload").version == "v2"
+    _reset_registry()
+
+
+def test_package_layout_node_dual_registration_conflicts(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    plugin = tmp_path / "package_dual"
+    plugin.mkdir()
+    module_name = "sure_eval_package_dual"
+    node_id = "normalization/package_dual"
+    _write_package_plugin(plugin, module_name, node_id=node_id)
+    add_plugin(plugin, project_dir=tmp_path)
+    monkeypatch.setattr(
+        node_registry_module.NodeRegistry,
+        "iter_entry_point_specs",
+        staticmethod(lambda: [(node_id, f"{module_name}.node")]),
+    )
+    with pytest.raises(ValueError, match="Duplicate external node_id"):
+        get_registry().resolve(node_id)
+    _reset_registry()
+
+
+def test_package_layout_route_dual_registration_conflicts(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    plugin = tmp_path / "package_dual_route"
+    plugin.mkdir()
+    module_name = "sure_eval_package_dual_route"
+    _write_package_plugin(
+        plugin,
+        module_name,
+        pipeline_id="asr.en.cer.aispeech_norm_en_v1.wenet_cer_v1",
+    )
+    add_plugin(plugin, project_dir=tmp_path)
+
+    class _FakeEP:
+        name = "asr"
+        value = f"{module_name}.routes"
+
+    monkeypatch.setattr(importlib.metadata, "entry_points", lambda **kwargs: [_FakeEP()])
+    with pytest.raises(ValueError, match="Duplicate route pipeline_id"):
+        load_task_routes("asr")
+    _reset_registry()
+
+
+@pytest.mark.parametrize(
+    ("directory", "kind"),
+    [
+        ("node_only_plugin", "node"),
+        ("pipeline_plugin_cer", "route"),
+        ("node_pipeline_plugin_wer", "node-and-route"),
+    ],
+)
+def test_unified_layout_examples_are_valid(directory: str, kind: str) -> None:
+    inspection = inspect_plugin(ROOT / "examples" / directory)
+    assert inspection.effective_kind == kind
+
+
 # ---- acceptance: manifest validation ----
 
 
@@ -518,7 +1052,9 @@ def test_manifest_rejections(tmp_path: Path) -> None:
     bad_api = tmp_path / "bad_api"
     bad_api.mkdir()
     _write_node(bad_api / "node.py")
-    (bad_api / "sure_eval_plugin.yaml").write_text('plugin_api: "sure-eval.plugin.v9"\n', encoding="utf-8")
+    (bad_api / "sure_eval_plugin.yaml").write_text(
+        'plugin_api: "sure-eval.plugin.v9"\n', encoding="utf-8"
+    )
     with pytest.raises(PluginError, match="plugin_api"):
         add_plugin(bad_api, project_dir=tmp_path)
     assert len(plugin_records(tmp_path)) == before
@@ -537,7 +1073,9 @@ def test_manifest_rejections(tmp_path: Path) -> None:
     bad_version = tmp_path / "bad_version"
     bad_version.mkdir()
     _write_node(bad_version / "node.py")
-    (bad_version / "sure_eval_plugin.yaml").write_text('requires_sure_eval: ">=9999"\n', encoding="utf-8")
+    (bad_version / "sure_eval_plugin.yaml").write_text(
+        'requires_sure_eval: ">=9999"\n', encoding="utf-8"
+    )
     with pytest.raises(PluginError, match="requires"):
         add_plugin(bad_version, project_dir=tmp_path)
     assert len(plugin_records(tmp_path)) == before
@@ -558,7 +1096,18 @@ def test_duplicate_pipeline_id_fails(tmp_path: Path) -> None:
 
     result = CliRunner().invoke(
         app,
-        ["--project-dir", str(tmp_path), "metric", "routes", "asr", "--language", "en", "--metric", "cer", "--json"],
+        [
+            "--project-dir",
+            str(tmp_path),
+            "metric",
+            "routes",
+            "asr",
+            "--language",
+            "en",
+            "--metric",
+            "cer",
+            "--json",
+        ],
     )
     assert result.exit_code == 1
     assert "Duplicate route pipeline_id" in result.stdout
@@ -613,7 +1162,16 @@ def test_transaction_recovery(tmp_path: Path) -> None:
     lock_tmp = sub / "plugins.recover.json.tmp"
     config_tmp.write_text(
         yaml.safe_dump(
-            {"plugins": [{"name": "recovered", "source": "path", "path": "recovered", "path_mode": "project_relative"}]},
+            {
+                "plugins": [
+                    {
+                        "name": "recovered",
+                        "source": "path",
+                        "path": "recovered",
+                        "path_mode": "project_relative",
+                    }
+                ]
+            },
             sort_keys=False,
         ),
         encoding="utf-8",

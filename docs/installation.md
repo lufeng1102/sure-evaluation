@@ -66,8 +66,11 @@ plugin distribution, whose future remote source is Open-Bench.
 ## Project-Local Plugin Setup
 
 The base installation already includes project-local plugin management; no
-additional Python extra is required. A local plugin directory may contain
-only `node.py`, only `routes.py`, or both:
+additional Python extra is required. The recommended plugin source tree uses
+the same `src/<package>/node.py` / `routes.py` layout for both `plugin add` and
+`pip install`; see [the unified layout](plugin_management.md#54-统一插件包布局plugin-add-与pip-install).
+The path loader also remains compatible with the simpler root-level layout.
+A plugin may provide only `node.py`, only `routes.py`, or both:
 
 ```bash
 sure-eval plugin add ./plugins/my_plugin

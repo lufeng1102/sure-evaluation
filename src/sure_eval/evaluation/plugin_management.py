@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 import importlib.util
 import json
 import os
+import sys
 import tempfile
+import threading
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +20,11 @@ import yaml
 
 import sure_eval
 from sure_eval.evaluation.core.node_protocol import registration_from_module
+
+try:  # Python 3.11+
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - exercised on Python 3.10 CI
+    import tomli as tomllib
 
 PLUGIN_DIRNAME = ".sure-eval"
 CONFIG_FILENAME = "plugins.yaml"
@@ -40,10 +48,23 @@ HASH_EXCLUDED_DIRS = {
     "cache",
     "caches",
 }
+_PACKAGE_IMPORT_LOCK = threading.RLock()
 
 
 class PluginError(ValueError):
     """A user-facing plugin declaration or lock error."""
+
+
+@dataclass(frozen=True)
+class PluginLayout:
+    """Resolved source layout for a local plugin directory."""
+
+    root: Path
+    kind: str
+    import_root: Path | None = None
+    package_module: str = ""
+    node_module: str = ""
+    route_module: str = ""
 
 
 @dataclass(frozen=True)
@@ -94,6 +115,192 @@ def _read_yaml(path: Path) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise PluginError(f"Plugin config must be a mapping: {path}")
     return value
+
+
+def _mapping_module(manifest: dict[str, Any], key: str) -> str:
+    value = manifest.get(key)
+    if value is None:
+        return ""
+    if not isinstance(value, dict) or not isinstance(value.get("module"), str):
+        raise PluginError(f"Manifest {key}.module must be a non-empty string")
+    module = value["module"].strip()
+    if not module:
+        raise PluginError(f"Manifest {key}.module must be a non-empty string")
+    return module
+
+
+def _module_parts(module: str, *, field: str) -> tuple[str, ...]:
+    parts = tuple(module.split("."))
+    if not parts or any(not part.isidentifier() for part in parts):
+        raise PluginError(f"Manifest {field} is not a valid Python module: {module!r}")
+    return parts
+
+
+def _module_source(import_root: Path, module: str, *, field: str) -> Path:
+    parts = _module_parts(module, field=field)
+    module_base = import_root.joinpath(*parts)
+    module_file = module_base.with_suffix(".py")
+    package_file = module_base / "__init__.py"
+    if module_file.is_file():
+        resolved = module_file.resolve()
+    elif package_file.is_file():
+        resolved = package_file.resolve()
+    else:
+        raise PluginError(f"Manifest {field} does not resolve inside src/: {module!r}")
+    if not _is_within(resolved, import_root.resolve()):
+        raise PluginError(f"Manifest {field} resolves outside src/: {module!r}")
+    return resolved
+
+
+def resolve_plugin_layout(
+    path: str | Path,
+    manifest: dict[str, Any] | None = None,
+) -> PluginLayout:
+    """Resolve either the legacy root-file layout or the v1 package layout."""
+
+    root = Path(path).expanduser().resolve()
+    manifest_path = root / MANIFEST_FILENAME
+    payload = manifest
+    if payload is None:
+        payload = _read_yaml(manifest_path) if manifest_path.exists() else {}
+    package_keys = {"package", "node", "route"}
+    package_layout = any(key in payload for key in package_keys)
+    legacy_layout = "nodes" in payload or "routes" in payload
+    if package_layout and legacy_layout:
+        raise PluginError(
+            "Package-layout module fields cannot be mixed with nodes/routes file fields"
+        )
+    if (
+        not package_layout
+        and (root / "src").is_dir()
+        and not (root / "node.py").exists()
+        and not (root / "routes.py").exists()
+    ):
+        raise PluginError(f"Package-layout plugin requires {MANIFEST_FILENAME}: {root}")
+    if not package_layout:
+        return PluginLayout(root=root, kind="legacy")
+    if not manifest_path.is_file():
+        raise PluginError(f"Package-layout plugin requires {MANIFEST_FILENAME}: {root}")
+
+    package_module = _mapping_module(payload, "package")
+    node_module = _mapping_module(payload, "node")
+    route_module = _mapping_module(payload, "route")
+    if not package_module:
+        raise PluginError("Package-layout plugin requires package.module")
+    if not node_module and not route_module:
+        raise PluginError("Package-layout plugin requires node.module, route.module, or both")
+    package_parts = _module_parts(package_module, field="package.module")
+    import_root = root / "src"
+    package_path = import_root.joinpath(*package_parts)
+    if not package_path.is_dir():
+        raise PluginError(
+            f"Manifest package.module does not resolve below src/: {package_module!r}"
+        )
+    current = import_root
+    for part in package_parts:
+        current /= part
+        if not _is_within(current.resolve(), import_root.resolve()):
+            raise PluginError(f"Manifest package.module resolves outside src/: {package_module!r}")
+        if not (current / "__init__.py").is_file():
+            raise PluginError(f"Package path requires __init__.py: {current}")
+    for field, module in (("node.module", node_module), ("route.module", route_module)):
+        if not module:
+            continue
+        if module != package_module and not module.startswith(package_module + "."):
+            raise PluginError(f"Manifest {field} must be inside package.module {package_module!r}")
+        _module_source(import_root, module, field=field)
+    return PluginLayout(
+        root=root,
+        kind="package",
+        import_root=import_root,
+        package_module=package_module,
+        node_module=node_module,
+        route_module=route_module,
+    )
+
+
+def _module_origin(module: ModuleType) -> Path | None:
+    raw = getattr(module, "__file__", None)
+    return Path(raw).resolve() if raw else None
+
+
+def _is_within(path: Path, root: Path) -> bool:
+    return path == root or root in path.parents
+
+
+def _clear_package_bytecode(layout: PluginLayout) -> None:
+    assert layout.import_root is not None
+    package_path = layout.import_root.joinpath(*layout.package_module.split("."))
+    for bytecode in package_path.rglob("*.pyc"):
+        try:
+            bytecode.unlink()
+        except OSError:
+            pass
+
+
+def _module_from_package(layout: PluginLayout, module_name: str, *, label: str) -> ModuleType:
+    assert layout.import_root is not None
+    _module_source(layout.import_root, module_name, field=f"{label}.module")
+    with _PACKAGE_IMPORT_LOCK:
+        importlib.invalidate_caches()
+        _clear_package_bytecode(layout)
+        for name in tuple(sys.modules):
+            if name == layout.package_module or name.startswith(layout.package_module + "."):
+                del sys.modules[name]
+        sys.path.insert(0, str(layout.import_root))
+        try:
+            module = importlib.import_module(module_name)
+        except Exception as exc:
+            raise PluginError(f"Failed to import plugin {module_name!r}: {exc}") from exc
+        finally:
+            try:
+                sys.path.remove(str(layout.import_root))
+            except ValueError:
+                pass
+    origin = _module_origin(module)
+    if origin is None or not _is_within(origin, layout.import_root.resolve()):
+        raise PluginError(
+            f"Plugin module {module_name!r} resolved outside {layout.import_root}: {origin}"
+        )
+    return module
+
+
+def load_local_node_module(path: str | Path) -> ModuleType | None:
+    """Load the declared node module from either supported local layout."""
+
+    root = Path(path).expanduser().resolve()
+    if not root.is_dir():
+        return None
+    manifest_path = root / MANIFEST_FILENAME
+    manifest = _read_yaml(manifest_path) if manifest_path.exists() else {}
+    layout = resolve_plugin_layout(root, manifest)
+    if layout.kind == "package":
+        return (
+            _module_from_package(layout, layout.node_module, label="node")
+            if layout.node_module
+            else None
+        )
+    node_path = root / "node.py"
+    return _module_from_path(node_path, label="node") if node_path.exists() else None
+
+
+def load_local_route_module(path: str | Path) -> ModuleType | None:
+    """Load the declared route module from either supported local layout."""
+
+    root = Path(path).expanduser().resolve()
+    if not root.is_dir():
+        return None
+    manifest_path = root / MANIFEST_FILENAME
+    manifest = _read_yaml(manifest_path) if manifest_path.exists() else {}
+    layout = resolve_plugin_layout(root, manifest)
+    if layout.kind == "package":
+        return (
+            _module_from_package(layout, layout.route_module, label="route")
+            if layout.route_module
+            else None
+        )
+    route_path = root / "routes.py"
+    return _module_from_path(route_path, label="routes") if route_path.exists() else None
 
 
 def _load_config(project_dir: str | Path | None = None) -> dict[str, Any]:
@@ -154,13 +361,13 @@ def _module_from_path(path: Path, *, label: str) -> ModuleType:
 
 
 def _node_registration(plugin_path: Path) -> Any | None:
-    node_path = plugin_path / "node.py"
-    if not node_path.exists():
+    module = load_local_node_module(plugin_path)
+    if module is None:
         return None
     try:
-        return registration_from_module(_module_from_path(node_path, label="node"), source="local")
+        return registration_from_module(module, source="local")
     except Exception as exc:
-        raise PluginError(f"Invalid node.py in {plugin_path}: {exc}") from exc
+        raise PluginError(f"Invalid node module in {plugin_path}: {exc}") from exc
 
 
 def _route_task(route: dict[str, Any]) -> str | None:
@@ -173,10 +380,58 @@ def _route_task(route: dict[str, Any]) -> str | None:
 
 
 def _route_module(plugin_path: Path) -> ModuleType | None:
-    route_path = plugin_path / "routes.py"
-    if not route_path.exists():
-        return None
-    return _module_from_path(route_path, label="routes")
+    return load_local_route_module(plugin_path)
+
+
+def _load_pyproject(path: Path) -> dict[str, Any]:
+    try:
+        with path.open("rb") as handle:
+            payload = tomllib.load(handle)
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        raise PluginError(f"Cannot read pyproject.toml {path}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise PluginError(f"pyproject.toml must be a mapping: {path}")
+    return payload
+
+
+def _entry_point_group(pyproject: dict[str, Any], group: str) -> dict[str, str]:
+    project = pyproject.get("project") or {}
+    if not isinstance(project, dict):
+        raise PluginError("pyproject.toml project must be a mapping")
+    groups = project.get("entry-points") or {}
+    if not isinstance(groups, dict):
+        raise PluginError("pyproject.toml project.entry-points must be a mapping")
+    raw = groups.get(group) or {}
+    if not isinstance(raw, dict) or any(not isinstance(value, str) for value in raw.values()):
+        raise PluginError(f"pyproject.toml entry point group {group!r} must be a string mapping")
+    return {str(name): value for name, value in raw.items()}
+
+
+def _validate_pyproject_entry_points(
+    plugin_path: Path,
+    layout: PluginLayout,
+    *,
+    node_id: str | None,
+    tasks: tuple[str, ...],
+) -> None:
+    pyproject_path = plugin_path / "pyproject.toml"
+    if layout.kind != "package" or not pyproject_path.exists():
+        return
+    pyproject = _load_pyproject(pyproject_path)
+    nodes = _entry_point_group(pyproject, "sure_eval.nodes")
+    routes = _entry_point_group(pyproject, "sure_eval.routes")
+    expected_nodes = {node_id: layout.node_module} if node_id else {}
+    expected_routes = {task: layout.route_module for task in tasks} if layout.route_module else {}
+    if nodes != expected_nodes:
+        raise PluginError(
+            "pyproject.toml sure_eval.nodes must match NODE_ID and manifest node.module: "
+            f"expected {expected_nodes!r}, got {nodes!r}"
+        )
+    if routes != expected_routes:
+        raise PluginError(
+            "pyproject.toml sure_eval.routes must map each route task to manifest "
+            f"route.module: expected {expected_routes!r}, got {routes!r}"
+        )
 
 
 def _validate_routes(plugin_path: Path, module: ModuleType | None) -> tuple[dict[str, Any], ...]:
@@ -192,7 +447,11 @@ def _validate_routes(plugin_path: Path, module: ModuleType | None) -> tuple[dict
     for raw in raw_routes:
         if not isinstance(raw, dict):
             raise PluginError(f"Each route in {plugin_path} must be a mapping")
-        missing = [key for key in ("pipeline_id", "metric", "nodes", "input_contract", "executor") if not raw.get(key)]
+        missing = [
+            key
+            for key in ("pipeline_id", "metric", "nodes", "input_contract", "executor")
+            if not raw.get(key)
+        ]
         if missing:
             raise PluginError(f"Route in {plugin_path} is missing: {', '.join(missing)}")
         pipeline_id = str(raw["pipeline_id"])
@@ -225,8 +484,12 @@ def _validate_declared_manifest(manifest: dict[str, Any], effective_kind: str) -
     required = str(manifest.get("requires_sure_eval") or "")
     if required and required.startswith(">="):
         try:
-            if tuple(map(int, sure_eval.__version__.split(".")[:2])) < tuple(map(int, required[2:].split(".")[:2])):
-                raise PluginError(f"Plugin requires SURE-EVAL {required}, current is {sure_eval.__version__}")
+            if tuple(map(int, sure_eval.__version__.split(".")[:2])) < tuple(
+                map(int, required[2:].split(".")[:2])
+            ):
+                raise PluginError(
+                    f"Plugin requires SURE-EVAL {required}, current is {sure_eval.__version__}"
+                )
         except ValueError as exc:
             raise PluginError(f"Invalid requires_sure_eval: {required}") from exc
 
@@ -276,6 +539,7 @@ def inspect_plugin(path: str | Path, *, name: str | None = None) -> PluginInspec
     manifest = _read_yaml(manifest_path) if manifest_path.exists() else {}
     if not isinstance(manifest, dict):
         raise PluginError(f"Plugin manifest must be a mapping: {manifest_path}")
+    layout = resolve_plugin_layout(plugin_path, manifest)
     plugin_name = str(name or manifest.get("name") or plugin_path.name)
     node = _node_registration(plugin_path)
     node_ids = (node.node_id,) if node else ()
@@ -289,6 +553,12 @@ def inspect_plugin(path: str | Path, *, name: str | None = None) -> PluginInspec
         raise PluginError("Manifest routes does not match routes.py presence")
     pipeline_ids = tuple(str(route["pipeline_id"]) for route in routes)
     tasks = tuple(sorted({task for task in (_route_task(route) for route in routes) if task}))
+    _validate_pyproject_entry_points(
+        plugin_path,
+        layout,
+        node_id=node.node_id if node else None,
+        tasks=tasks,
+    )
     raw_hash_include = manifest.get("hash_include") or []
     if not isinstance(raw_hash_include, list):
         raise PluginError("hash_include must be a list of relative file paths")
@@ -351,13 +621,17 @@ def _write_pair(project_dir: Path, config: dict[str, Any], lock: dict[str, Any])
     config_tmp = Path(config_name)
     lock_tmp = Path(lock_name)
     try:
-        config_tmp.write_text(yaml.safe_dump(config, sort_keys=False, allow_unicode=True), encoding="utf-8")
+        config_tmp.write_text(
+            yaml.safe_dump(config, sort_keys=False, allow_unicode=True), encoding="utf-8"
+        )
         lock_tmp.write_text(json.dumps(lock, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         for temp in (config_tmp, lock_tmp):
             with temp.open("rb") as handle:
                 os.fsync(handle.fileno())
         marker = root / ".plugins.transaction.json"
-        marker.write_text(json.dumps({"config_tmp": str(config_tmp), "lock_tmp": str(lock_tmp)}), encoding="utf-8")
+        marker.write_text(
+            json.dumps({"config_tmp": str(config_tmp), "lock_tmp": str(lock_tmp)}), encoding="utf-8"
+        )
         with marker.open("rb") as handle:
             os.fsync(handle.fileno())
         os.replace(config_tmp, root / CONFIG_FILENAME)
@@ -380,7 +654,13 @@ def _entry_for_name(entries: list[dict[str, Any]], name: str) -> dict[str, Any] 
     return None
 
 
-def add_plugin(path: str | Path, *, project_dir: str | Path | None = None, name: str | None = None, replace: bool = False) -> PluginInspection:
+def add_plugin(
+    path: str | Path,
+    *,
+    project_dir: str | Path | None = None,
+    name: str | None = None,
+    replace: bool = False,
+) -> PluginInspection:
     if isinstance(path, str) and path.startswith("open-bench://"):
         raise PluginError(
             "Open-Bench plugin sources are reserved for the second phase; "
@@ -394,13 +674,28 @@ def add_plugin(path: str | Path, *, project_dir: str | Path | None = None, name:
     lock_entries = list(lock.get("plugins") or [])
     existing = _entry_for_name(entries, inspection.name)
     if existing:
-        existing_path = (root / existing["path"]).resolve() if existing.get("path_mode") == "project_relative" else Path(existing["path"]).resolve()
+        existing_path = (
+            (root / existing["path"]).resolve()
+            if existing.get("path_mode") == "project_relative"
+            else Path(existing["path"]).resolve()
+        )
         existing_hash = _entry_for_name(lock_entries, inspection.name) or {}
-        same = existing.get("source") == "path" and existing_path == inspection.path and existing_hash.get("content_hash") == inspection.content_hash
+        same = (
+            existing.get("source") == "path"
+            and existing_path == inspection.path
+            and existing_hash.get("content_hash") == inspection.content_hash
+        )
         if same:
+            from sure_eval.evaluation.node_registry import get_registry
+
+            registry = get_registry()
+            registry.invalidate_project_plugins()
+            registry.ensure_project_plugins(root)
             return inspection
         if not replace:
-            raise PluginError(f"Plugin name already exists with a different source or hash: {inspection.name}")
+            raise PluginError(
+                f"Plugin name already exists with a different source or hash: {inspection.name}"
+            )
         entries = [entry for entry in entries if entry.get("name") != inspection.name]
         lock_entries = [entry for entry in lock_entries if entry.get("name") != inspection.name]
     try:
@@ -412,9 +707,22 @@ def add_plugin(path: str | Path, *, project_dir: str | Path | None = None, name:
         config_path_value = str(inspection.path)
         path_mode = "absolute"
         portable = False
-    entries.append({"name": inspection.name, "source": "path", "path": config_path_value, "path_mode": path_mode, **({"portable": False} if not portable else {})})
+    entries.append(
+        {
+            "name": inspection.name,
+            "source": "path",
+            "path": config_path_value,
+            "path_mode": path_mode,
+            **({"portable": False} if not portable else {}),
+        }
+    )
     lock_entries.append(inspection.lock_entry(resolved_path=config_path_value, portable=portable))
     _write_pair(root, {"plugins": entries}, {"format": LOCK_FORMAT, "plugins": lock_entries})
+    from sure_eval.evaluation.node_registry import get_registry
+
+    registry = get_registry()
+    registry.invalidate_project_plugins()
+    registry.ensure_project_plugins(root)
     return inspection
 
 
@@ -426,7 +734,11 @@ def plugin_records(project_dir: str | Path | None = None) -> list[dict[str, Any]
     for entry in config.get("plugins") or []:
         name = str(entry.get("name") or "")
         try:
-            path = (root / entry["path"]).resolve() if entry.get("path_mode") == "project_relative" else Path(entry["path"]).expanduser().resolve()
+            path = (
+                (root / entry["path"]).resolve()
+                if entry.get("path_mode") == "project_relative"
+                else Path(entry["path"]).expanduser().resolve()
+            )
             inspection = inspect_plugin(path, name=name)
             lock_entry = _entry_for_name(list(lock.get("plugins") or []), name)
             if entry.get("path_mode") == "project_relative":
@@ -459,7 +771,11 @@ def plugin_records(project_dir: str | Path | None = None) -> list[dict[str, Any]
                 "effective_kind": inspection.effective_kind,
                 "lock_status": lock_status,
                 "env_status": "unknown",
-                "reason": "" if lock_status == "ready" else f"{lock_status}: lock does not match plugin content",
+                "reason": (
+                    ""
+                    if lock_status == "ready"
+                    else f"{lock_status}: lock does not match plugin content"
+                ),
             }
         except PluginError as exc:
             lock_entry = _entry_for_name(list(lock.get("plugins") or []), name) or {}
@@ -492,11 +808,25 @@ def remove_plugin(name: str, *, project_dir: str | Path | None = None) -> bool:
     found = any(entry.get("name") == name for entry in config.get("plugins") or [])
     if not found:
         return False
-    _write_pair(root, {"plugins": [entry for entry in config.get("plugins") or [] if entry.get("name") != name]}, {"format": LOCK_FORMAT, "plugins": [entry for entry in lock.get("plugins") or [] if entry.get("name") != name]})
+    _write_pair(
+        root,
+        {"plugins": [entry for entry in config.get("plugins") or [] if entry.get("name") != name]},
+        {
+            "format": LOCK_FORMAT,
+            "plugins": [entry for entry in lock.get("plugins") or [] if entry.get("name") != name],
+        },
+    )
+    from sure_eval.evaluation.node_registry import get_registry
+
+    registry = get_registry()
+    registry.invalidate_project_plugins()
+    registry.ensure_project_plugins(root)
     return True
 
 
-def sync_plugins(name: str | None = None, *, project_dir: str | Path | None = None) -> list[dict[str, Any]]:
+def sync_plugins(
+    name: str | None = None, *, project_dir: str | Path | None = None
+) -> list[dict[str, Any]]:
     records = plugin_records(project_dir)
     selected = [record for record in records if name is None or record["name"] == name]
     drifted = [record for record in selected if record["lock_status"] != "ready"]

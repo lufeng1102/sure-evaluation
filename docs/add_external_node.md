@@ -7,7 +7,10 @@
 
 ## 0. 一分钟概览
 
-外部节点以单文件 `node.py` 提供实现，可以通过三条用途不同的通道接入：
+外部节点的实现文件仍是 `node.py`；推荐将它放在统一的
+`src/<package>/node.py` 插件包布局中。该布局可直接用于 `plugin add`，也可通过
+`pip install` + entry point 正式分发；根目录 `node.py`/`routes.py` 布局继续兼容。
+三条用途不同的接入通道如下：
 
 1. `pip install` + entry point：正式分发给 Python 环境中的所有项目；
 2. `sure-eval plugin add <dir>`：固定到当前项目并写入配置和内容 lock；
@@ -29,7 +32,8 @@ sure-eval node list / metric routes / metric describe / metric run
 ```
 
 项目级插件还支持只含 `routes.py` 的 pipeline-only 目录，或者同一目录同时提供
-`node.py` 和 `routes.py`。完整管理契约见[插件管理](plugin_management.md)。
+`node.py` 和 `routes.py`。统一目录结构、文件差异及当前迁移边界见
+[插件管理 §5.4](plugin_management.md#54-统一插件包布局plugin-add-与pip-install)。
 
 ## 1. `node.py` 必备属性
 

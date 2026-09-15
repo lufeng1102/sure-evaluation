@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sure-eval-node-pipeline-plugin-wer"
+version = "0.1.0"
+requires-python = ">=3.10"
+
+[project.entry-points."sure_eval.nodes"]
+"normalization/example_lowercase" = "sure_eval_node_pipeline_plugin_wer.node"
+
+[project.entry-points."sure_eval.routes"]
+asr = "sure_eval_node_pipeline_plugin_wer.routes"
+
+[tool.setuptools.packages.find]
+where = ["src"]

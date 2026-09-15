@@ -142,7 +142,10 @@ python -m json.tool .sure-eval-demo/asr-en-wer/pipeline_description.json
 
 ## 项目级插件
 
-一个外部插件目录可以只提供 `node.py`、只提供 `routes.py`，或同时提供两者。
+推荐的外部插件使用统一的 `src/<package>/` 包布局（见
+[插件管理](docs/plugin_management.md#54-统一插件包布局plugin-add-与pip-install)），
+可以只提供 node、只提供 route，或同时提供两者。当前项目路径加载器同时兼容插件根目录
+直接放置 `node.py`/`routes.py` 的旧布局。
 通过项目级命令添加一次后，不需要在每条命令中重复传入 `--extra-node-path`：
 
 ```bash

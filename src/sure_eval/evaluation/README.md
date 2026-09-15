@@ -319,9 +319,12 @@ the conversion can affect scoring.
 
 ### Project-Local Plugins
 
-External nodes and routes do not need to be copied into this package. A local
-plugin directory may provide only `node.py`, only `routes.py`, or both. Add the
-directory once to a project:
+External nodes and routes do not need to be copied into this package. The
+recommended source tree is the shared `src/<package>/` layout described in
+[Plugin Management](../../../docs/plugin_management.md#54-统一插件包布局plugin-add-与pip-install).
+The current project-path loader also accepts the compatibility layout with
+`node.py` and/or `routes.py` at the plugin root. A plugin may provide only a
+node, only routes, or both. Add the directory once to a project:
 
 ```bash
 sure-eval --project-dir /path/to/project plugin add /path/to/my_plugin

@@ -1,0 +1,8 @@
+name: "node-only-plugin"
+plugin_api: "sure-eval.plugin.v1"
+kind: "node"
+package:
+  module: "sure_eval_node_only_plugin"
+node:
+  module: "sure_eval_node_only_plugin.node"
+requires_sure_eval: ">=0.1"

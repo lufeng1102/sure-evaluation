@@ -1,0 +1,9 @@
+name: "node-pipeline-plugin-wer"
+plugin_api: "sure-eval.plugin.v1"
+kind: "node-and-route"
+package:
+  module: "sure_eval_node_pipeline_plugin_wer"
+node:
+  module: "sure_eval_node_pipeline_plugin_wer.node"
+route:
+  module: "sure_eval_node_pipeline_plugin_wer.routes"

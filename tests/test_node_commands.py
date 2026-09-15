@@ -32,7 +32,8 @@ def test_create_node_scaffolds_files(tmp_path: Path) -> None:
     assert payload["node_id"] == "normalization/my_norm"
     package_dir = Path(payload["package_dir"])
     assert (package_dir / "pyproject.toml").exists()
-    node_py = package_dir / "sure_eval_node_my_norm" / "node.py"
+    assert (package_dir / "sure_eval_plugin.yaml").exists()
+    node_py = package_dir / "src" / "sure_eval_node_my_norm" / "node.py"
     assert node_py.exists()
 
     content = node_py.read_text(encoding="utf-8")
@@ -42,7 +43,7 @@ def test_create_node_scaffolds_files(tmp_path: Path) -> None:
 
 def test_create_node_scoring_uses_scorer_selector(tmp_path: Path) -> None:
     payload = create_node("My Scorer", stage="scoring", output_dir=tmp_path)
-    node_py = Path(payload["package_dir"]) / "sure_eval_node_my_scorer" / "node.py"
+    node_py = Path(payload["package_dir"]) / "src" / "sure_eval_node_my_scorer" / "node.py"
     content = node_py.read_text(encoding="utf-8")
     assert "'scorer': 'my_scorer'" in content
 
@@ -53,6 +54,12 @@ def test_create_node_pyproject_declares_entry_point(tmp_path: Path) -> None:
     content = pyproject.read_text(encoding="utf-8")
     assert '[project.entry-points."sure_eval.nodes"]' in content
     assert '"normalization/my_norm" = "sure_eval_node_my_norm.node"' in content
+    assert 'where = ["src"]' in content
+
+    manifest = (Path(payload["package_dir"]) / "sure_eval_plugin.yaml").read_text(encoding="utf-8")
+    assert 'module: "sure_eval_node_my_norm"' in manifest
+    assert 'module: "sure_eval_node_my_norm.node"' in manifest
+    assert payload["plugin_add_hint"].startswith("sure-eval plugin add ")
 
 
 def test_create_node_requires_stage(tmp_path: Path) -> None:

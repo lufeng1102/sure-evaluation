@@ -31,7 +31,11 @@ sure-eval plugin check my_plugin
 sure-eval metric routes <task> --language <lang> --metric <metric> --json
 ```
 
-A plugin directory may contain only `node.py`, only `routes.py`, or both.
+A plugin package should use the shared `src/<package>/` layout described in
+[Plugin Management](plugin_management.md#54-统一插件包布局plugin-add-与pip-install):
+the package may provide only a node, only routes, or both. The current
+project-path loader also accepts the compatibility layout with `node.py` and/or
+`routes.py` at the plugin root.
 `.sure-eval/plugins.yaml` declares the project plugins and
 `.sure-eval/plugins.lock.json` fixes their inspected content. Use installed
 entry points for formal Python distribution and reserve `--extra-node-path`

@@ -40,3 +40,6 @@ results/
 tmp/
 *.log
 MANIFEST.runtime*
+
+# macOS
+.DS_Store

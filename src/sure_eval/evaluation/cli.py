@@ -364,7 +364,7 @@ def main(
         raise typer.Exit()
     selected_project_dir = project_dir or Path.cwd()
     try:
-        get_registry().ensure_project_plugins(selected_project_dir)
+        get_registry().ensure_project_plugins(selected_project_dir, reload=True)
     except Exception as exc:
         raise typer.BadParameter(str(exc), param_hint="--project-dir") from exc
     ctx.obj = selected_project_dir
@@ -1042,6 +1042,7 @@ def node_create(
     console.print(f"[green]Created[/green] {payload['node_id']} in {payload['package_dir']}")
     for path in payload["files"]:
         console.print(f"  - {path}")
+    console.print(f"Add to project: [bold]{payload['plugin_add_hint']}[/bold]")
     console.print(f"Install: [bold]{payload['install_hint']}[/bold]")
 
 

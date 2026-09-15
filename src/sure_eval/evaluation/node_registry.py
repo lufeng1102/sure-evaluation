@@ -47,9 +47,7 @@ def _check_artifacts(payload: Any, keys: tuple[str, ...], *, node_id: str, phase
         return
     missing = [key for key in keys if key not in payload.artifacts]
     if missing:
-        raise ValueError(
-            f"Node {node_id} {phase} missing artifact(s): {', '.join(missing)}"
-        )
+        raise ValueError(f"Node {node_id} {phase} missing artifact(s): {', '.join(missing)}")
 
 
 class NodeRegistry:
@@ -66,13 +64,22 @@ class NodeRegistry:
         self._project_dir: Path | None = None
         self._conflict_paths: tuple[str, ...] | None = None
 
-    def ensure_project_plugins(self, project_dir: str | Path | None = None) -> None:
+    def ensure_project_plugins(
+        self,
+        project_dir: str | Path | None = None,
+        *,
+        reload: bool = False,
+    ) -> None:
         """Load project-local plugin paths once for the selected project directory."""
 
         from sure_eval.evaluation.plugin_management import configure_registry_paths, project_root
 
-        root = project_root(project_dir) if project_dir is not None else (self._project_dir or project_root())
-        if self._project_dir == root:
+        root = (
+            project_root(project_dir)
+            if project_dir is not None
+            else (self._project_dir or project_root())
+        )
+        if self._project_dir == root and not reload:
             return
         self.project_local_paths = configure_registry_paths(root)
         self._project_dir = root
@@ -184,6 +191,15 @@ class NodeRegistry:
             reg = self._local_registration(local_path)
             if reg is not None and reg.node_id == node_id:
                 p = Path(local_path)
+                if p.is_file():
+                    return p.resolve()
+                if reg.module and not reg.module.startswith(
+                    ("_sure_eval_plugin_", "_sure_eval_local_node_")
+                ):
+                    module = __import__(reg.module, fromlist=["__name__"])
+                    module_file = getattr(module, "__file__", None)
+                    if module_file:
+                        return Path(module_file).resolve()
                 return (p / "node.py" if p.is_dir() else p).resolve()
         raise KeyError(f"Unknown node: {node_id!r}")
 
@@ -290,7 +306,9 @@ class NodeRegistry:
                 return reg
         raise KeyError(f"Unknown node reference: {node_ref!r}")
 
-    def build(self, node_id: str, *, local_paths: list[str | Path] | None = None, **config: Any) -> Any:
+    def build(
+        self, node_id: str, *, local_paths: list[str | Path] | None = None, **config: Any
+    ) -> Any:
         reg = self.resolve(node_id, local_paths=local_paths)
         if reg.build is None:
             raise NotImplementedError(f"Node {node_id} has no 'build' factory")
@@ -300,7 +318,9 @@ class NodeRegistry:
         return self._checked_node(node, node_id, reg.consumes, reg.produces)
 
     @staticmethod
-    def _checked_node(node: Any, node_id: str, consumes: tuple[str, ...], produces: tuple[str, ...]) -> Any:
+    def _checked_node(
+        node: Any, node_id: str, consumes: tuple[str, ...], produces: tuple[str, ...]
+    ) -> Any:
         def checked(payload: Any) -> Any:
             _check_artifacts(payload, consumes, node_id=node_id, phase="consumes")
             new_payload, result = node(payload)
@@ -358,7 +378,15 @@ class NodeRegistry:
     @staticmethod
     def _local_registration(path: str | Path) -> NodeRegistration | None:
         try:
-            module = _import_path(path)
+            p = Path(path)
+            if p.is_dir():
+                from sure_eval.evaluation.plugin_management import load_local_node_module
+
+                module = load_local_node_module(p)
+                if module is None:
+                    return None
+            else:
+                module = _import_path(p)
         except (ImportError, OSError, ValueError):
             return None
         return registration_from_module(module, source="local")
@@ -383,7 +411,13 @@ class NodeRegistry:
         self.ensure_project_plugins()
         modules: list[ModuleType] = []
         for path in self._effective_local_paths():
-            module = _import_route_module(path)
+            p = Path(path)
+            if p.is_dir():
+                from sure_eval.evaluation.plugin_management import load_local_route_module
+
+                module = load_local_route_module(p)
+            else:
+                module = _import_route_module(p)
             if module is not None:
                 modules.append(module)
         return modules

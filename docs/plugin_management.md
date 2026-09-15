@@ -6,7 +6,8 @@
 当前状态：第一阶段本地路径版已实现：`sure-eval plugin add/list/check/remove/sync`
 可用；Open-Bench 下载、远程 revision 拉取和远程 cache 仍属于第二阶段。现有
 `--extra-node-path` 和 Python entry point 行为保持不变。第一阶段的路径插件形态
-限制为一个目录最多包含一个 `node.py` 和一个 `routes.py`；多 node 声明属于后续扩展。
+支持统一 `src/<package>/` 包布局及根目录兼容布局；v1 限制一个插件最多声明一个
+node 模块和一个 route 模块，多 node 声明属于后续 plugin API 扩展。
 
 ## 1. 两条独立通道
 
@@ -188,7 +189,254 @@ sure-eval --project-dir . metric run --pipeline pipeline.json \
 否则 `plugin add` 在 import 前拒绝。第一阶段无声明文件的本地目录仍按现有
 `node.py`/`routes.py` 规则加载。
 
-建议的声明字段：
+### 5.4 统一插件包布局（`plugin add` 与 `pip install`）
+
+为了让插件可以在“项目固定引入”和“正式 Python 分发”之间迁移，推荐两种通道共用
+同一套 Python 包目录。两种通道的差异只在注册和依赖处理，不应复制一份节点实现：
+
+```text
+my_plugin/
+├── pyproject.toml              # pip install 必需；plugin add 只在需要时读取
+├── sure_eval_plugin.yaml       # 包布局的 SURE-EVAL manifest，建议两种通道都保留
+├── README.md
+├── src/
+│   └── sure_eval_my_plugin/
+│       ├── __init__.py
+│       ├── node.py              # node-only 或 node-and-route 时存在
+│       └── routes.py            # route-only 或 node-and-route 时存在
+└── tests/
+    └── test_plugin.py
+```
+
+包布局共用的 `pyproject.toml` 基础元数据可以写成：
+
+```toml
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sure-eval-my-plugin"
+version = "0.1.0"
+requires-python = ">=3.10"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+```
+
+`tests/` 是插件作者的回归测试目录，不是 SURE-EVAL 运行时必需文件；真正决定插件
+能力的是 `node.py`、`routes.py` 及其声明。entry point 表只需按下面场景追加到同一
+份 `pyproject.toml`。
+
+目录骨架保持一致，但文件要求由插件能力决定：
+
+| 场景 | 实现文件 | `sure_eval_plugin.yaml` | `pyproject.toml` 的 entry point |
+|---|---|---|---|
+| `node` | `node.py`，不提供 `routes.py` | `kind: node`，声明 `node.module` | 只声明 `sure_eval.nodes` |
+| `route`（pipeline-only） | `routes.py`，不提供 `node.py` | `kind: route`，声明 `route.module` | 只声明 `sure_eval.routes` |
+| `node-and-route` | 同时提供 `node.py` 和 `routes.py` | `kind: node-and-route`，同时声明两个 module | 同时声明两个 entry point |
+
+统一包布局的三种场景均必须声明 `package.module`；`node.module` 和
+`route.module` 根据插件实际提供的能力分别声明，并且至少存在一个。
+
+建议的 manifest 使用模块路径而不是固定文件路径，这样 `src/` 布局和已安装包使用
+同一份声明。统一包布局的 v1 只允许一个 node 模块和一个 route 模块：
+
+```yaml
+name: "my-asr-plugin"
+plugin_api: "sure-eval.plugin.v1"
+kind: "node-and-route"
+package:
+  module: "sure_eval_my_plugin"
+node:
+  module: "sure_eval_my_plugin.node"
+route:
+  module: "sure_eval_my_plugin.routes"
+requires_sure_eval: ">=0.1"
+```
+
+`kind` 仍然是派生能力的可选断言：`node`、`route`、`node-and-route` 必须分别与
+实现文件和声明集合一致；route 中的 `nodes` 仍可引用内置节点或其他插件节点。
+
+上面的 `package.module`、`node.module`、`route.module` 是统一包布局的目标字段；它们
+与第一阶段根目录兼容布局使用的 `routes: "routes.py"`、`nodes: ["node.py"]` 二选一，
+不能混用。
+
+三个 module 字段的语义与约束：
+
+- `package.module` 是可导入的包名前缀（通常对应 `src/` 下的目录；多级包使用点号表示，
+  例如 `src/org/sure_eval_plugin` 对应 `org.sure_eval_plugin`），是 `node.module` /
+  `route.module` 的命名空间前缀；模块必须等于该包或以 `package.module + "."` 开头，
+  不能仅使用字符串 `startswith` 放宽边界。
+- `node.module` / `route.module` 是包内模块的全限定名，等价于 `pyproject.toml`
+  entry point 的 value。统一包布局 v1 每个插件只支持一个 node 模块，因此
+  `node.module` 是单值；多 node 需要在新的 plugin API 版本中引入 `nodes` 数组，不能
+  在 v1 中无版本地改变字段类型。
+- node 的身份映射必须分别校验：`sure_eval.nodes` entry point **名**等于模块导出的
+  `NODE_ID`，entry point **值**等于 manifest 的 `node.module`，且该模块确实承载该
+  `NODE_ID`。这三项是相关但不同的字段，不能把模块路径与 node ID 直接比较。
+
+#### node-only
+
+只保留 `node.py`，例如：
+
+```text
+my_node/
+├── pyproject.toml
+├── sure_eval_plugin.yaml
+└── src/sure_eval_my_node/
+    ├── __init__.py
+    └── node.py
+```
+
+`pyproject.toml` 的正式分发注册为：
+
+```toml
+[project.entry-points."sure_eval.nodes"]
+"normalization/my_norm" = "sure_eval_my_node.node"
+```
+
+这个插件可以被 `node list` 发现；只有 route 引用它，或其 manifest 为匹配任务声明
+`default_for`，它才会进入某条 pipeline 的可选节点。
+
+#### route-only（新增 pipeline）
+
+只保留 `routes.py`，例如：
+
+```text
+my_pipeline/
+├── pyproject.toml
+├── sure_eval_plugin.yaml
+└── src/sure_eval_my_pipeline/
+    ├── __init__.py
+    └── routes.py
+```
+
+正式分发只注册 route：
+
+```toml
+[project.entry-points."sure_eval.routes"]
+asr = "sure_eval_my_pipeline.routes"
+```
+
+route 的 `nodes` 可以全部引用内置节点，因此不需要 `node.py` 或
+`sure_eval.nodes` entry point；安装或项目引入后可直接走
+`metric routes -> metric describe -> metric run`。
+
+#### node-and-route
+
+同时提供 `node.py` 和 `routes.py`，route 的 `nodes` 包含该插件的 `NODE_ID`：
+
+```text
+my_node_pipeline/
+├── pyproject.toml
+├── sure_eval_plugin.yaml
+└── src/sure_eval_my_plugin/
+    ├── __init__.py
+    ├── node.py
+    └── routes.py
+```
+
+```toml
+[project.entry-points."sure_eval.nodes"]
+"normalization/my_norm" = "sure_eval_my_plugin.node"
+
+[project.entry-points."sure_eval.routes"]
+asr = "sure_eval_my_plugin.routes"
+```
+
+一次注册后，`describe` 生成的 pipeline JSON、运行报告中的 `pipeline_id` 和
+`pipeline_trace` 应同时包含外部 node 和它所属的 route。
+
+#### 注册与验证命令
+
+正式分发通道直接安装同一目录：
+
+```bash
+python -m pip install -e ./my_plugin
+sure-eval node list --json
+sure-eval metric routes asr --language en --metric cer --json
+```
+
+项目固定引入通道使用同一目录：
+
+```bash
+sure-eval plugin add ./my_plugin
+sure-eval plugin list --json
+sure-eval metric routes asr --language en --metric cer --json
+sure-eval metric describe asr --pipeline-id <pipeline-id> --output pipeline.json
+sure-eval metric run --pipeline pipeline.json ...
+```
+
+两条通道都应覆盖插件作者自己的单元测试，以及 SURE-EVAL 的发现和端到端测试。对
+`node-only` 检查 `node list`/节点选择；对 `route-only` 检查
+`routes -> describe -> run`；对 `node-and-route` 额外检查报告中的外部节点
+`pipeline_trace`。
+
+#### 两种通道的文件与行为差异
+
+| 项目 | `sure-eval plugin add ./my_plugin` | `pip install -e ./my_plugin` |
+|---|---|---|
+| 目录布局 | 与 pip 通道相同 | 与 plugin 通道相同 |
+| `pyproject.toml` | 包布局方案中可作为元数据读取；不负责安装 | 必需，用于构建包、安装依赖和写入 entry point 元数据 |
+| `sure_eval_plugin.yaml` | 包布局方案中用于定位 module、校验 kind/API；建议视为必需 | 当前及近期实现不读取；entry point 是发现真值。若未来启用校验，必须另行规定 manifest 的包内位置和 package-data 打包规则 |
+| 注册范围 | 当前项目的 `.sure-eval/plugins.yaml` 和 lock | 当前 Python 环境的 `importlib.metadata` |
+| 依赖处理 | 不自动安装，需用户先准备依赖 | 按包声明安装依赖 |
+| 可复现信息 | `plugins.lock.json` 中的路径和内容 hash | 包版本/依赖 lock；entry point 本身不锁源码 hash |
+| 移除方式 | `plugin remove` 只删除项目声明，不删除源码 | `pip uninstall` 删除环境中的已安装包 |
+
+#### 两条通道等价的前提与冲突
+
+共用同一目录不等于可以同时用两条通道注册到同一项目，须注意：
+
+1. `__init__.py` 是本方案的插件包规范要求，用于避免不同构建后端对 namespace
+   package 的处理差异；它不是 `import_module` 的 Python 绝对技术前提。
+2. entry point 名必须等于 `NODE_ID`（`sure_eval.nodes`），`sure_eval.routes` 的
+   entry point 名是 task 名（如 `asr`）。
+3. 同一插件不要同时对同一个项目既 `pip install -e` 又 `plugin add`：包含 node 时
+   两个来源会触发 `Duplicate external node_id`；route-only 插件则会触发
+   `Duplicate route pipeline_id`。开发期二选一，发布后由使用者二选一。
+4. 版本与依赖声明分流：pip 通道用 `pyproject.toml` 的 `[project].dependencies`
+   声明可安装的 Python 依赖（若发布环境能解析 `sure-evaluation`，也可声明其版本）；
+   plugin add 通道只用 manifest 的 `requires_sure_eval` 做宿主版本断言，且不安装
+   Python 依赖。节点运行时依赖应继续通过 `NODE_ENV`/`node_env.yaml` 或资源清单声明，
+   由用户按环境流程准备。两条通道的兼容版本要求应保持一致。
+
+#### 实现状态与迁移规则
+
+`plugin add` 和 `--extra-node-path` 已按 `package.module`、`node.module`、
+`route.module` 解析统一 `src/<package>/` 布局；根目录直接放置
+`node.py`/`routes.py` 的形态继续作为兼容布局。新插件应只使用统一布局，不要在项目根
+复制第二份实现，否则会造成两套代码、hash 漂移和身份冲突。
+
+对于 pip 分发，项目根的 `sure_eval_plugin.yaml` 默认不会自动进入 wheel。除非未来
+明确规定将 manifest 放入 `src/<package>/` 并通过 package data 打包、再用
+`importlib.resources` 读取，否则 pip 通道不得依赖该文件完成发现或校验。
+
+从根目录兼容布局迁移到统一包布局的步骤：
+
+1. 新建 `src/<package>/`，把 `node.py`/`routes.py` 移入，并新增 `__init__.py`；
+2. 新增 `pyproject.toml`，声明 `[tool.setuptools.packages.find] where = ["src"]`
+   与对应 entry point；
+3. 把 `sure_eval_plugin.yaml` 的 `routes: "routes.py"` / `nodes: ["node.py"]`
+   替换为 `package.module` / `node.module` / `route.module`；
+4. 删除插件根目录下的旧 `node.py`/`routes.py`，避免两套实现；
+5. 分别用 `pip install -e .` 与 `plugin add .` 验证等价；若
+   使用多 node，先升级到支持 `nodes` 数组的 plugin API 版本。
+
+包布局验收必须覆盖本节的 `node`、`route`、`node-and-route` 三种目录，
+并分别验证 `plugin add` 与 `pip install` 的发现、route 注入、describe/run、依赖失败
+提示和 lock/hash 行为。
+
+仓库中的可运行统一布局示例：
+
+- node-only：[`examples/node_only_plugin`](../examples/node_only_plugin)；
+- route-only：[`examples/pipeline_plugin_cer`](../examples/pipeline_plugin_cer)；
+- node-and-route：[`examples/node_pipeline_plugin_wer`](../examples/node_pipeline_plugin_wer)。
+
+#### 兼容根目录布局的声明字段（第一阶段）
+
+对于当前已实现的根目录 `node.py`/`routes.py` 形态，声明字段如下：
 
 ```yaml
 name: "my-asr-plugin"
@@ -207,7 +455,7 @@ SURE-EVAL 版本不满足时，`plugin add` 硬报错，不写入配置和 lock�
 
 `routes` 是单值（一个插件通常只有一个 `routes.py`，其 `ROUTES` 列表内含多条
 route），`nodes` 是数组（目标格式允许一个插件有多个 node 文件，每个文件暴露一个
-`NODE_ID`；第一阶段路径加载只接受一个 `node.py`）。
+`NODE_ID`；v1 路径加载只接受一个 `node.py`）。
 
 `resource_manifest` 是可选字段，仅用于声明插件运行时所需的外部资源清单；路径必须
 相对于插件根目录。该文件声明运行时依赖与可寻址资源，`resource_hashes` 只校验其中
@@ -456,9 +704,19 @@ provider 或模型代码中对其他模型社区/下载工具的既有依赖。
 4. 配置路径与 `--extra-node-path` 合并、冲突显式报错；
 5. 本地 hash 漂移能被 `sync` 发现；
 6. entry point 通道行为不因项目插件管理而改变；
-7. manifest 缺失、格式非法、`kind` 不一致或版本不满足时，`add` 拒绝且不改动已有配置；
+7. 对要求 manifest 的统一包布局/Open-Bench 插件，manifest 缺失、格式非法、`kind`
+   不一致或版本不满足时，`add` 拒绝且不改动已有配置；第一阶段本地根目录兼容布局
+   仍允许无 manifest；
 8. 重复 `node_id` 或 `pipeline_id` 时列出全部来源并硬报错；
 9. `missing/invalid/untrusted/drifted` 插件在 import 前跳过，命中其 pipeline 的
    `run` 给出插件状态和原因；
 10. `add --replace` 或删除过程中发生中断时，下一次启动能够恢复一份完整的
-    `plugins.yaml` 与 `plugins.lock.json`。
+    `plugins.yaml` 与 `plugins.lock.json`；
+11. 统一包布局：`plugin add` 按 `package.module`/`node.module`/`route.module`
+    解析 `src/<package>/`，`node`、`route`、`node-and-route` 三种目录的发现、
+    route 注入、describe/run 与根目录布局等价；
+12. 统一包布局下，node entry point name 与导出的 `NODE_ID` 不一致，或 entry point
+    value 与 manifest `node.module` 不一致时，`plugin add` 明确报错；route entry
+    point name 必须与 route 所属 task 一致；
+13. 同一插件经 `pip install -e` 与 `plugin add` 同时注册时，含 node 的场景报告
+    `Duplicate external node_id`，route-only 场景报告 `Duplicate route pipeline_id`。
